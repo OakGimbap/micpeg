@@ -7,7 +7,7 @@
 >
 > 기기 식별자(USB 시리얼, Bluetooth MAC, 디스플레이 UID)는 플레이스홀더로 치환했습니다.
 
-# micpin — macOS 기본 오디오 입력 고정 데몬
+# micpeg — macOS 기본 오디오 입력 고정 데몬
 
 ## 1. Context — 왜 이걸 만드는가
 
@@ -95,7 +95,7 @@ SoundSource 6은 $49 + HAL 드라이버 설치로 과잉.
 
 ## 3. 아키텍처
 
-Swift 단일 바이너리 `micpin` — launchd 상주 LaunchAgent와 CLI를 겸한다.
+Swift 단일 바이너리 `micpeg` — launchd 상주 LaunchAgent와 CLI를 겸한다.
 링크 대상은 **CoreAudio + Foundation뿐. AppKit 없음.**
 
 **메인 스레드는 `CFRunLoopRun()`으로 파킹한다.** 타이머도 예약 소스도 없는 CFRunLoop는 포트 셋에서
@@ -173,13 +173,13 @@ Swift 단일 바이너리 `micpin` — launchd 상주 LaunchAgent와 CLI를 겸�
 | `ABSENT` | Elgato 미연결 | 완전 무동작 |
 | `PINNED` | Elgato 연결, 감시 중 | BT 전환만 되돌림 |
 | `YIELDED` | 사용자가 비-BT 선택, 또는 안정된 BT를 수동 선택 | 무동작 |
-| `PAUSED` | `micpin off` | 무동작 |
+| `PAUSED` | `micpeg off` | 무동작 |
 | `BACKOFF` | 5초 내 3회 되돌림 | 60초 무동작 + **경고 로그 (반드시 가시화)** |
 
 `BACKOFF`를 눈에 띄게 로깅해야 하는 이유: [FB15113809](https://developer.apple.com/forums/thread/763583)에
 따르면 Continuity로 오염된 HAL은 `noErr`을 반환하면서 무한히 되돌려 가드를 조용히 소진시킨다.
 
-`YIELDED` 해제: Elgato 재연결 / `micpin on` / 재로그인.
+`YIELDED` 해제: Elgato 재연결 / `micpeg on` / 재로그인.
 
 ### 3.3 오작동 시나리오 검토 결과
 
@@ -198,10 +198,10 @@ Swift 단일 바이너리 `micpin` — launchd 상주 LaunchAgent와 CLI를 겸�
 ## 4. 생성할 파일
 
 ```
-~/.local/bin/micpin                          # Swift 단일 바이너리 (데몬 + CLI)
-~/.config/micpin/config.json
-~/Library/LaunchAgents/com.micpin.agent.plist
-~/Library/Logs/micpin.log                    # StandardErrorPath, 시작 시 256KB 초과면 truncate
+~/.local/bin/micpeg                          # Swift 단일 바이너리 (데몬 + CLI)
+~/.config/micpeg/config.json
+~/Library/LaunchAgents/com.micpeg.agent.plist
+~/Library/Logs/micpeg.log                    # StandardErrorPath, 시작 시 256KB 초과면 truncate
 ```
 
 ```json
@@ -229,28 +229,28 @@ MicLock의 Primary→Fallback 체인 패턴 차용 — Elgato 부재 시 행선�
 
 | 명령 | 동작 |
 |---|---|
-| `micpin status` | 상태 기계 위치, 현재 기본 입력, 고정 대상 |
-| `micpin off` / `on` | `PAUSED` 진입/해제 (`YIELDED`도 함께 해제) |
-| `micpin pick` | 현재 기본 입력을 UID째로 1순위에 기록 |
-| `micpin daemon` | launchd 전용 모드 |
-| `micpin uninstall` | `launchctl bootout` + 파일 제거 |
+| `micpeg status` | 상태 기계 위치, 현재 기본 입력, 고정 대상 |
+| `micpeg off` / `on` | `PAUSED` 진입/해제 (`YIELDED`도 함께 해제) |
+| `micpeg pick` | 현재 기본 입력을 UID째로 1순위에 기록 |
+| `micpeg daemon` | launchd 전용 모드 |
+| `micpeg uninstall` | `launchctl bootout` + 파일 제거 |
 
-**launchd** (`com.micpin.agent.plist`)
+**launchd** (`com.micpeg.agent.plist`)
 
 ```
 RunAtLoad          true
 KeepAlive          true            # {SuccessfulExit:false} 아님
 ThrottleInterval   60
 ProcessType        Background      # 미지정 시 시스템이 임의의 light resource limit을 적용
-StandardErrorPath  ~/Library/Logs/micpin.log     # + setvbuf(stderr, nil, _IOLBF, 0)
+StandardErrorPath  ~/Library/Logs/micpeg.log     # + setvbuf(stderr, nil, _IOLBF, 0)
 ```
 
-설치/제거는 `launchctl bootstrap gui/$UID <plist>` / `launchctl bootout gui/$UID/com.micpin.agent`.
+설치/제거는 `launchctl bootstrap gui/$UID <plist>` / `launchctl bootout gui/$UID/com.micpeg.agent`.
 `launchctl load|unload`는 macOS 26에서 **legacy**다 (로컬 `man 1 launchctl`의 `LEGACY SUBCOMMANDS` 항목).
 
 ## 5. 구현 순서
 
-1. `micpin.swift` — 장치 열거/해석(`'uidd'`), transport type 조회, 입력 채널 확인
+1. `micpeg.swift` — 장치 열거/해석(`'uidd'`), transport type 조회, 입력 채널 확인
    (input scope `kAudioDevicePropertyStreams`에 `AudioObjectGetPropertyDataSize` → `dataSize > 0`,
    할당 없음. Wave:1이 입력 1ch/출력 2ch 겸용이라 scope 구분이 결과를 가른다)
 2. 리스너 3개 등록 + `CFRunLoopRun()` 파킹. **여기서 검증 5·6번을 먼저 통과시킨다** —
@@ -266,22 +266,22 @@ StandardErrorPath  ~/Library/Logs/micpin.log     # + setvbuf(stderr, nil, _IOLBF
 
 세션당 한 번:
 ```bash
-L=gui/$(id -u)/com.micpin.agent
+L=gui/$(id -u)/com.micpeg.agent
 P=$(launchctl print $L | awk '/pid = /{print $3; exit}')
 ```
 
 | # | 명령 | 통과 기준 |
 |---|---|---|
-| 1 | `sudo powermetrics --samplers tasks -n 3 -i 5000 \| grep -E "micpin\|^Name"` | `Wakeups (Intr, Pkg idle)` = `0.00`, 3샘플 전부 |
+| 1 | `sudo powermetrics --samplers tasks -n 3 -i 5000 \| grep -E "micpeg\|^Name"` | `Wakeups (Intr, Pkg idle)` = `0.00`, 3샘플 전부 |
 | 2 | `footprint -p $P \| tail -3` | `phys_footprint` < 8 MB |
 | 3 | `vmmap -summary $P \| grep -E "Physical footprint\|Writable regions"` | `written=` < 4 MB |
 | 4 | `ps -o pid,rss,time,etime -p $P` (24시간 후) | `TIME` < 00:00:02, RSS가 1시간 시점 대비 10% 이내 |
-| 5 | **리스너 생존 — 장치 이벤트.** `tail -f ~/Library/Logs/micpin.log` 하며 Wave를 물리적 분리 후 재연결 | 재연결 2초 내 전이 로그 |
+| 5 | **리스너 생존 — 장치 이벤트.** `tail -f ~/Library/Logs/micpeg.log` 하며 Wave를 물리적 분리 후 재연결 | 재연결 2초 내 전이 로그 |
 | 6 | **리스너 생존 — 장치 변경 없는 default-input 이벤트.** 시스템 설정 → 사운드 → 입력에서 MacBook Pro Microphone 선택 | 1.5초 내 Wave:1로 복원 + 전이 로그 |
 | 7 | **`dispatchMain()` 회귀 게이트.** `dispatchMain()` 파킹 변종을 빌드해 5·6번 반복 | 하나라도 실패하면 `CFRunLoopRun()` 선택이 load-bearing임이 입증. **어느 쪽이든 `CFRunLoopRun()`으로 출시** |
 | 8 | **`'srst'` 복구.** `sudo killall coreaudiod; sleep 8; launchctl print $L \| grep "pid = "` 후 6번 재실행 | PID가 `$P`와 동일(크래시 아님), `'srst'` 재등록 로그, 6번 통과 |
-| 9 | `launchctl kill SIGSEGV $L` ×6 후 `log show --last 5m --predicate 'process == "launchd"' \| grep micpin` | 재기동 간격 ≥ 60초, 깨끗한 `exit(0)` |
-| 10 | `sudo fs_usage -w -f filesys 2>/dev/null \| grep micpin` (유휴 60초) | syscall 0건 |
+| 9 | `launchctl kill SIGSEGV $L` ×6 후 `log show --last 5m --predicate 'process == "launchd"' \| grep micpeg` | 재기동 간격 ≥ 60초, 깨끗한 `exit(0)` |
+| 10 | `sudo fs_usage -w -f filesys 2>/dev/null \| grep micpeg` (유휴 60초) | syscall 0건 |
 | 11 | `sudo powermetrics ... \| grep coreaudiod` — 에이전트 로드 vs `launchctl bootout $L` 비교 | `CPU ms/s`·wakeups에 측정 가능한 차이 없음 |
 | 12 | config 편집 후 `launchctl kill SIGHUP $L` | 재로드 성공, 동일 PID 유지 |
 
@@ -307,7 +307,7 @@ P=$(launchctl print $L | awk '/pid = /{print $3; exit}')
 않고 dyld 공유 캐시에서만 해석되며 텍스트 페이지가 시스템 전역 공유다. `phys_footprint`가 정직한 수치다.*
 
 **한계.** AirPods 연결 후 ~15초 안에 수동으로 AirPods 마이크를 고르면 한 번 되돌려진다.
-`micpin off`를 쓰거나 잠시 뒤 다시 고르면 존중된다. 초기자 신호가 존재하지 않으므로
+`micpeg off`를 쓰거나 잠시 뒤 다시 고르면 존중된다. 초기자 신호가 존재하지 않으므로
 (§2의 `log stream` 0줄) 이보다 정확히 가를 방법은 없다.
 
 **비간섭 근거.** 마이크를 열지 않으므로(라우팅 설정일 뿐 캡처가 아님) 주황색 인디케이터·TCC 프롬프트가
@@ -320,7 +320,7 @@ Gatekeeper 우클릭뿐이다.* 이미 스트림을 연 앱은 자기 장치를 
 
 # 구현 결과 (2026-09-08)
 
-구현 완료, 설치 및 부트스트랩됨. 소스는 `~/.local/src/micpin/micpin.swift` (739줄, `swiftc -O`로 226KB).
+구현 완료, 설치 및 부트스트랩됨. 소스는 `~/.local/src/micpeg/micpeg.swift` (739줄, `swiftc -O`로 226KB).
 
 ## 실측 결과
 
@@ -349,7 +349,7 @@ Gatekeeper 우클릭뿐이다.* 이미 스트림을 연 앱은 자기 장치를 
 
 ## 구현 중 발견해 고친 버그
 
-`micpin on`이 `enabled: true`를 쓰고도 `status`가 계속 `PAUSED`를 보고했다. 원인은 SIGHUP 핸들러가
+`micpeg on`이 `enabled: true`를 쓰고도 `status`가 계속 `PAUSED`를 보고했다. 원인은 SIGHUP 핸들러가
 `state`를 직접 대입해 `transition()`을 우회한 것과, `transition()`이 상태가 같으면 조기 반환해
 상태 파일을 쓰지 않은 것. 수정: `transition()`은 로그만 변경 시 남기고 **상태 파일은 항상 갱신**하며,
 SIGHUP은 상태를 추측하지 않고 중립값 `.absent`로 리셋해 `applyPin()`이 실제 결과를 판정·기록하게 했다.
@@ -360,9 +360,9 @@ sudo 또는 물리적 조작이 필요해 미수행:
 
 | # | 명령 / 조작 | 확인 대상 |
 |---|---|---|
-| 1 | `sudo powermetrics --samplers tasks -n 3 -i 5000 \| grep -E "micpin\|^Name"` | idle wakeups = 0.00 (확정적 검증) |
-| 8 | `sudo killall coreaudiod` → 8초 후 `micpin status` + 로그 | **`'srst'` 복구 — 최대 리스크** |
-| 10 | `sudo fs_usage -w -f filesys \| grep micpin` (유휴 60초) | syscall 0건 |
+| 1 | `sudo powermetrics --samplers tasks -n 3 -i 5000 \| grep -E "micpeg\|^Name"` | idle wakeups = 0.00 (확정적 검증) |
+| 8 | `sudo killall coreaudiod` → 8초 후 `micpeg status` + 로그 | **`'srst'` 복구 — 최대 리스크** |
+| 10 | `sudo fs_usage -w -f filesys \| grep micpeg` (유휴 60초) | syscall 0건 |
 | 5 | Elgato USB 물리적 분리 후 재연결 | `'dev#'` 리스너 생존, `ABSENT`↔`PINNED` |
 | — | **AirPods 연결** | 입력은 Elgato 유지 + 출력만 AirPods 이동. AirPods의 실제 transport가 `blue`인지 확인 — 아니면 차단 목록 조정 필요 |
 
@@ -470,7 +470,7 @@ default input:         Elgato Wave:1
 
 **가드의 손익이 애초에 맞지 않았다.** 지키려던 것은 "잠들기 전 고른 BT 마이크를 웨이크 때 뒤집지 않기"인데,
 대가는 **웨이크마다 마이크가 조용히 AirPods로 넘어가 굳는 것**이다. `YIELDED`는 끈적해서 Elgato
-재연결이나 `micpin on` 없이는 풀리지 않는다. `coreaudiod` 재시작은 16일에 한 번이지만 웨이크는 매일이다.
+재연결이나 `micpeg on` 없이는 풀리지 않는다. `coreaudiod` 재시작은 16일에 한 번이지만 웨이크는 매일이다.
 
 **수정 3건:**
 1. **도착 기록은 재구축 여부와 무관하게 항상 한다.** `isRebuild`는 이제 도착 기록을 막지 않는다.
@@ -575,14 +575,14 @@ flip-back 간격이 406ms → 436ms로 일관된다. macOS는 리셋 직후 구�
 
 ## 0-wakeup 확정 (2026-09-08 15:09)
 
-`sudo powermetrics --samplers tasks -n 3 -i 5000`에서 **micpin이 3개 샘플 어디에도 나타나지 않았다**
+`sudo powermetrics --samplers tasks -n 3 -i 5000`에서 **micpeg이 3개 샘플 어디에도 나타나지 않았다**
 — task 샘플러는 활동량 상위만 보고하므로 보고 임계값 아래라는 뜻이다. 다만 이는 부재의 증거이지
 수치가 아니므로, `top`으로 카운터를 직접 읽었다 (sudo 불필요):
 
 ```
 $ top -l 2 -s 5 -pid <PID> -stats pid,command,cpu,time,idlew
 PID    COMMAND %CPU TIME     IDLEW
-19340  micpin  0.0  00:00.10 0
+19340  micpeg  0.0  00:00.10 0
 ```
 
 델타 모드 두 번째 샘플이므로 **5초 구간의 idle wakeup이 0개**다. CPU 시간도 20초 브래킷에서
@@ -605,7 +605,7 @@ AirPods 연결 상태에서 USB 분리 → 8초 → 재연결:
 **두 가지가 확인됐다:**
 1. **`ABSENT` 구간 무개입.** AirPods가 연결돼 있었으므로 macOS는 그 사이 기본 입력을 옮겼을 것이나
    데몬은 `REVERT`를 한 줄도 내지 않았다. §3.1의 비목표("Elgato 미연결 시 무동작")가 지켜졌다.
-2. **재연결 시에도 쓰기 없음.** macOS가 새로 도착한 USB 마이크를 스스로 기본값으로 선택했고 micpin은
+2. **재연결 시에도 쓰기 없음.** macOS가 새로 도착한 USB 마이크를 스스로 기본값으로 선택했고 micpeg은
    확인만 했다(`default input is the target`). 불필요한 개입이 0이다.
 
 ---
@@ -613,7 +613,7 @@ AirPods 연결 상태에서 USB 분리 → 8초 → 재연결:
 # 코드 리뷰 대응 (2026-09-08 15:25, `/code-review xhigh`)
 
 15건 + 부록 3건. 실제 코드에 대조한 결과 대부분이 실재하는 결함이었다. 소스 1126줄로 재작성.
-이전 버전은 `micpin.swift.bak`에 보관.
+이전 버전은 `micpeg.swift.bak`에 보관.
 
 ## 수정 (14 + 부록 2)
 
@@ -621,7 +621,7 @@ AirPods 연결 상태에서 USB 분리 → 8초 → 재연결:
 |---|---|---|
 | 1 | `Config.load()`가 "없음"과 "깨짐"을 모두 `.fallback`으로 뭉갰고, CLI가 그걸 되써서 **핀 목록을 영구 파괴** | `ConfigLoad {missing, ok, corrupt}` 도입. CLI는 corrupt면 거부하고 종료, 데몬은 **메모리에 있던 설정을 유지**. 키가 존재하면 반드시 디코드돼야 하도록 변경(빠진 키만 기본값) |
 | 2 | 시작 시 churn grace가 없어 로그인 시 이미 연결된 BT가 몇 초 뒤 입력을 가져가면 "사용자 선택"으로 오판 | `systemChurnUntil` 도입. 시작과 HAL 리셋 **양쪽**에서 무장. srst의 `lastBlockedArrival = Date()` 특수 케이스 제거 |
-| 3 | 백오프 만료 시 아무도 핀을 재적용하지 않고, SIGHUP이 `backoffUntil`을 못 지워 `micpin on`이 무효 | 만료 웨이크 타이머 + SIGHUP이 백오프·yield·pause 전부 해제 |
+| 3 | 백오프 만료 시 아무도 핀을 재적용하지 않고, SIGHUP이 `backoffUntil`을 못 지워 `micpeg on`이 무효 | 만료 웨이크 타이머 + SIGHUP이 백오프·yield·pause 전부 해제 |
 | 4 | `cmdInstall`이 존재하지 않는 바이너리 경로를 plist에 박고 성공 보고 → launchd 무한 크래시 루프 | 실행 중인 바이너리를 찾아 복사, 없으면 명시적 실패. bootout→bootstrap 경쟁도 5회 재시도 |
 | 5 | 리스너 등록 실패를 "FATAL"로 찍고 **계속 실행** → 영구히 귀먹은 데몬 | `exit(1)` — KeepAlive가 복구한다 |
 | 6 | `hasInput()`이 일시적으로 false면 `ABSENT`로 확정되고 재시도 없음 | 1초 간격 **최대 5회** 재시도. 무한 폴링이 되면 0-wakeup이 깨지므로 반드시 유계 |
@@ -662,7 +662,7 @@ staleness는 실측했으나 재현되지 않았다(쓰기가 2ms 내 반영, `s
 | 시작 시 churn 창 무장 | ✅ `system churn window armed for 15s (daemon start)` |
 | churn 창 내 BT 탈취 → 되돌림 | ✅ `REVERT ... (system churn to AirPods)` |
 | churn 창 종료 후 의도적 BT 선택 → 존중 | ✅ `YIELDED` |
-| `micpin on` → yield 해제 | ✅ |
+| `micpeg on` → yield 해제 | ✅ |
 | post-write grace 내 flip-back → 되돌림 | ✅ |
 | idle wakeups | ✅ **0** (`IDLEW 0`) |
 | `phys_footprint` | ✅ 4065 KB (재작성 전과 동일) |
@@ -672,7 +672,7 @@ staleness는 실측했으나 재현되지 않았다(쓰기가 2ms 내 반영, `s
 
 `systemChurnUntil` 때문에 **데몬 시작 또는 HAL 리셋 후 15초 동안은 의도적인 블루투스 마이크 선택도
 되돌려진다.** 기존의 "AirPods 연결 후 15초" 한계와 같은 성격이며, 안전한 방향(데몬의 목적 우선)이다.
-회피는 `micpin off` 또는 15초 후 재선택.
+회피는 `micpeg off` 또는 15초 후 재선택.
 
 ## 재작성 후 실기기 재검증 (2026-09-08 15:33–15:35) — 3/3 통과
 
@@ -761,12 +761,12 @@ RSS 2768 KB 대 `phys_footprint` 7857 KB — 약 5MB가 압축된 상태이며, 
    **그 출력 객체 이벤트가 되돌리기를 촉발했다**(macOS가 입력 객체 publish 전에 이미 기본 입력을
    옮겼다). 2차 재연결에서는 출력 객체만 신규로 등록됐다. LG는 `dprt`로 차단 목록에 없으므로 계속 걸러진다.
 3. **상태 파일 중복 쓰기 제거.** `transition()`이 무조건 쓰던 것을 상태 또는 이유가 바뀔 때만
-   쓰도록 변경. 이전의 stale-hold 버그 수정은 유지된다 — `micpin on`은 항상 새 이유를 들고 온다.
+   쓰도록 변경. 이전의 stale-hold 버그 수정은 유지된다 — `micpeg on`은 항상 새 이유를 들고 온다.
    상태 전이 시 로그 로테이션(256KB)도 함께 수행한다.
 4. **검사 스크립트 판정 로직 수정.** `idlew`를 누적값으로 표기하고 시간당 비율로 환산(참고용),
    CPU 임계값을 5초로 현실화, 장치별 `ARRIVED` 횟수를 출력해 플래핑 재발을 바로 볼 수 있게 했다.
 
-회귀 확인: 비차단 transport 수동 선택 존중 → `micpin on` 복귀 통과. 1일차 결과는
+회귀 확인: 비차단 transport 수동 선택 존중 → `micpeg on` 복귀 통과. 1일차 결과는
 `leakcheck-result-day1.txt`에 보존.
 
 ## 2일차 점검 예약
@@ -778,7 +778,7 @@ RSS 2768 KB 대 `phys_footprint` 7857 KB — 약 5MB가 압축된 상태이며, 
 사용자 가설: "LG 모니터 스피커를 사용한 것이 원인." **부분적으로만 맞다.**
 
 - LG는 실제로 기본 출력이었다(`system_profiler`에서 `Default Output Device: Yes` 확인).
-- **그러나 스피커 선택 자체가 트리거는 아니다.** micpin과 독립적인 관찰기로 90초간
+- **그러나 스피커 선택 자체가 트리거는 아니다.** micpeg과 독립적인 관찰기로 90초간
   HAL 장치 집합을 1초 간격 샘플링한 결과 **변화 0건** — LG가 기본 출력인 상태에서도 플래핑이 없다.
 - 시간대 분포가 더 그럴듯한 설명을 준다: 01–09시 연속(시간당 319회), **13시 0회**,
   10·11·12·14시 간헐적. **작업 중에는 발생하지 않고 유휴 구간에 발생한다** —
@@ -800,7 +800,7 @@ RSS 2768 KB 대 `phys_footprint` 7857 KB — 약 5MB가 압축된 상태이며, 
 
 ### 부수 효과 — 진단 정보 손실
 
-micpin이 LG를 완전히 무시하므로 **앞으로 로그에 `ARRIVED LG`가 아예 남지 않는다.**
+micpeg이 LG를 완전히 무시하므로 **앞으로 로그에 `ARRIVED LG`가 아예 남지 않는다.**
 플래핑 재발 여부는 로그로 알 수 없고, CPU 수치(0.070ms × N)에만 간접적으로 반영된다.
 직접 확인하려면 독립 관찰기가 필요하다. 데몬의 일이 디스플레이 감시는 아니므로 이 교환은 타당하다.
 
@@ -835,7 +835,7 @@ state:         PINNED (14:35:20 기준)        ← 데몬은 고정됐다고 믿
 **배제한 원인:**
 - 잠자기 — `pmset -g log`에 Sleep/Wake 없음, Amphetamine이 잠자기 차단 중이었음
 - `coreaudiod` 재시작 — 9/8 15:35(수동 kill) 이후 계속 실행 (`etime 02-00:34`)
-- 프로세스 재기동 — micpin `etime 01-00:18` 연속
+- 프로세스 재기동 — micpeg `etime 01-00:18` 연속
 - work 큐 교착 — SIGHUP이 즉시 작동해 되돌림
 - `'dIn '` 리스너 사망 — 직후 시험에서 정상 발화, 올바르게 `YIELDED`
 

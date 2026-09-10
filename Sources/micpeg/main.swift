@@ -1,4 +1,4 @@
-// micpin — pins the macOS default audio INPUT device.
+// micpeg — pins the macOS default audio INPUT device.
 //
 // Scope discipline: this program reads and writes exactly one system property,
 // kAudioHardwarePropertyDefaultInputDevice. It never touches the default output,
@@ -11,12 +11,12 @@ import Foundation
 // MARK: - Paths
 
 let home = FileManager.default.homeDirectoryForCurrentUser
-let configPath = home.appendingPathComponent(".config/micpin/config.json")
-let statePath  = home.appendingPathComponent(".config/micpin/state.json")
-let logPath    = home.appendingPathComponent("Library/Logs/micpin.log")
-let plistPath  = home.appendingPathComponent("Library/LaunchAgents/com.micpin.agent.plist")
-let binPath    = home.appendingPathComponent(".local/bin/micpin")
-let agentLabel = "com.micpin.agent"
+let configPath = home.appendingPathComponent(".config/micpeg/config.json")
+let statePath  = home.appendingPathComponent(".config/micpeg/state.json")
+let logPath    = home.appendingPathComponent("Library/Logs/micpeg.log")
+let plistPath  = home.appendingPathComponent("Library/LaunchAgents/com.micpeg.agent.plist")
+let binPath    = home.appendingPathComponent(".local/bin/micpeg")
+let agentLabel = "com.micpeg.agent"
 
 // MARK: - Logging
 
@@ -329,8 +329,8 @@ final class Daemon {
     /// All state lives on `work`. HAL notifications are delivered on `hal` and hop
     /// to `work` immediately, so tearing listeners down (which happens on `work`)
     /// never has to wait on the queue those listeners are being dispatched to.
-    let work = DispatchQueue(label: "com.micpin.work")
-    let hal  = DispatchQueue(label: "com.micpin.hal")
+    let work = DispatchQueue(label: "com.micpeg.work")
+    let hal  = DispatchQueue(label: "com.micpeg.hal")
 
     var config = Config.fallback
     var configMTime: Date?
@@ -799,7 +799,7 @@ final class Daemon {
         // Refresh the state file whenever anything a reader would notice changed —
         // the state itself or the reason. Writing unconditionally is what turned a
         // flapping device into thousands of identical file writes; gating on the
-        // reason still fixes the stale-hold bug this replaced, because `micpin on`
+        // reason still fixes the stale-hold bug this replaced, because `micpeg on`
         // always arrives with a new reason.
         guard changed || why != lastWrittenReason else { return }
         lastWrittenReason = why
@@ -837,7 +837,7 @@ final class Daemon {
             config = .fallback
             configEverLoaded = true
             log("no config at \(configPath.path); using defaults with no target — "
-              + "run `micpin pick` to choose one")
+              + "run `micpeg pick` to choose one")
         case .corrupt(let why):
             // Keep whatever we already had. Falling back would replace a good target
             // list with an empty one and silently unpin everything.
@@ -859,11 +859,11 @@ final class Daemon {
             try enc.encode(sf).write(to: statePath, options: .atomic)
             stateWriteFailed = false
         } catch {
-            // Logged once per failure run: silently dropping this made `micpin status`
+            // Logged once per failure run: silently dropping this made `micpeg status`
             // claim the daemon had never run while it was pinning correctly.
             if !stateWriteFailed {
                 stateWriteFailed = true
-                log("WARNING: cannot write \(statePath.path): \(error) — `micpin status` "
+                log("WARNING: cannot write \(statePath.path): \(error) — `micpeg status` "
                   + "will report stale state until this is fixed")
             }
         }
@@ -871,7 +871,7 @@ final class Daemon {
 
     func run() {
         truncateLogIfLarge()
-        log("micpin starting (pid \(getpid()))")
+        log("micpeg starting (pid \(getpid()))")
         reloadConfigIfNeeded()
         registerAll()
         snapshotDevices()
@@ -987,7 +987,7 @@ func cmdStatus() {
         print("enabled:       \(c.enabled)")
         c.reportBlocklistProblems { print("               \($0)") }
     case .missing:
-        print("enabled:       (no config — run: micpin install)")
+        print("enabled:       (no config — run: micpeg install)")
     case .corrupt(let why):
         print("enabled:       CONFIG MALFORMED — \(why)")
         print("               the daemon is running on its last good settings;")
@@ -998,7 +998,7 @@ func cmdStatus() {
     print("default input: \(cur.map { "\(deviceName($0)) [\(fourCC(transportType($0)))]" } ?? "(none)")")
 
     if cfg.input.priority.isEmpty {
-        print("target:        (none configured — run: micpin pick)")
+        print("target:        (none configured — run: micpeg pick)")
     } else {
         for (i, ref) in cfg.input.priority.enumerated() {
             let resolved = ref.uid.flatMap { deviceID(forUID: $0) }
@@ -1029,7 +1029,7 @@ func cmdEnable(_ on: Bool) {
     do { try cfg.save() } catch {
         print("error: could not write config: \(error)"); exit(1)
     }
-    print(on ? "micpin enabled" : "micpin paused")
+    print(on ? "micpeg enabled" : "micpeg paused")
     nudgeDaemon()
 }
 
@@ -1060,7 +1060,7 @@ func cmdInstall() {
     // install reported success, with no log file to point at the cause.
     if !fm.isExecutableFile(atPath: binPath.path) {
         guard let src = runningExecutable() else {
-            print("error: no micpin binary at \(binPath.path), and the running binary")
+            print("error: no micpeg binary at \(binPath.path), and the running binary")
             print("       could not be located to copy. Put it there and re-run install.")
             exit(1)
         }
@@ -1081,7 +1081,7 @@ func cmdInstall() {
             print("seeded target from current default input: \(deviceName(id))")
             warnIfTargetIsBlocked(id, cfg)
         } else {
-            print("warning: no default input device found; run 'micpin pick' after install")
+            print("warning: no default input device found; run 'micpeg pick' after install")
         }
         do { try cfg.save() } catch {
             print("error: could not write config: \(error)"); exit(1)
@@ -1166,7 +1166,7 @@ func cmdDaemon() {
         daemon.configMTime = nil
         daemon.configEverLoaded = false
         daemon.reloadConfigIfNeeded()
-        // An explicit `micpin on` is the user's remedy for every hold, so it has to
+        // An explicit `micpeg on` is the user's remedy for every hold, so it has to
         // clear all of them — a backoff left in place made the command inert while
         // the mic stayed wrong.
         if daemon.state == .yielded || daemon.state == .paused || daemon.state == .backoff {
@@ -1195,9 +1195,9 @@ func cmdDaemon() {
 
 func usage() {
     print("""
-    micpin — pins the macOS default audio input device
+    micpeg — pins the macOS default audio input device
 
-    usage: micpin <command>
+    usage: micpeg <command>
 
       status      show current state, target and daemon liveness
       list        list input devices with transport type and UID
