@@ -1,0 +1,11 @@
+.DS_Store
+
+# SwiftPM
+.build/
+.swiftpm/
+
+# Local agent settings
+.claude/settings.local.json
+
+# Soak-test output — contains local device names
+leakcheck-result*.txt
