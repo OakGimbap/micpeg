@@ -77,6 +77,16 @@ updated:       2026-09-10 16:12:05.732
 daemon:        pid = 20138
 ```
 
+### Updating
+
+```sh
+git pull
+./scripts/install.sh
+```
+
+The script stages the freshly built binary itself and then re-bootstraps the agent, so an
+upgrade actually takes effect.
+
 ## Commands
 
 | Command | What it does |
