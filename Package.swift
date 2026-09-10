@@ -24,9 +24,20 @@ let package = Package(
         .executableTarget(name: "micpeg",
                           dependencies: ["MicpegAudio"],
                           path: "Sources/micpeg"),
-        // The settings app. Deliberately does not depend on MicpegAudio yet: stage 2 only
-        // registers and unregisters the agent, and a dependency it does not use would make
-        // the invariant greps look like they are proving more than they are.
-        .executableTarget(name: "MicpegApp", path: "Sources/MicpegApp")
+        // The window. A library rather than part of the executable so SwiftUI previews can
+        // build it: previews need a target Xcode can compile on its own, and an
+        // executableTarget with @main is not one.
+        //
+        // It — not MicpegAudio — is where reading the default *output* device belongs. The
+        // daemon links MicpegAudio, and the invariant that keeps "micpeg never touches your
+        // speakers" honest is a grep for DefaultOutputDevice across everything the daemon
+        // links. Putting the app's one read of it here keeps that grep meaningful.
+        .target(name: "MicpegUI",
+                dependencies: ["MicpegAudio"],
+                path: "Sources/MicpegUI"),
+        // Thin: @main, the app delegate, and the wiring between MicpegUI and the agent.
+        .executableTarget(name: "MicpegApp",
+                          dependencies: ["MicpegUI", "MicpegAudio"],
+                          path: "Sources/MicpegApp")
     ]
 )

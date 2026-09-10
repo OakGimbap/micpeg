@@ -1,17 +1,13 @@
-// Stages 2 and 3 of the build order in docs/app-design.md: the smallest app that can answer
-// the questions that document lists as documented-but-unobserved — does BundleProgram
-// resolve, does registration survive a move and an update, is .requiresApproval reachable and
-// recoverable, does deleting the app tear the agent down — and then the smallest app that can
-// take over from the hand-written LaunchAgent and repair a registration that has come loose
-// from this bundle.
+// The app: @main, the delegate, and the wiring between the window and the background agent.
 //
-// This is not the interface. docs/app-ui.md governs that, and it lands at stage 4. What
-// this window owes the person testing it is the opposite of a finished design: every
-// SMAppService result verbatim, including the error domain and code, and a status read
-// taken *after* each call rather than inferred from it. The file is expected to be deleted
-// and replaced, not grown into the real thing.
+// Thin on purpose. The window and everything it renders live in MicpegUI, which knows nothing
+// about ServiceManagement — deciding whether the agent is healthy needs SMAppService, the
+// legacy plist, launchd and proc_pidpath, and all of that is registration work. This file is
+// where the two meet: it takes InstallSurvey's verdict, reduces it to the one thing the window
+// needs to say, and turns the window's banner buttons back into registration operations.
 
 import AppKit
+import MicpegUI
 import ServiceManagement
 import SwiftUI
 
@@ -19,149 +15,104 @@ import SwiftUI
 struct MicpegSettingsApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @State private var agent = AgentController()
+    @State private var model = AppModel()
 
     init() {
-        // Exits the process if an argument was given. See Headless.swift for why the
-        // harness has a terminal front end at all.
+        // Exits the process if an argument was given. See Headless.swift.
         Headless.runIfRequested()
     }
 
     var body: some Scene {
-        WindowGroup("Micpeg") {
-            HarnessView(agent: agent)
+        WindowGroup(Copy.appName) {
+            MainWindow(model: model,
+                       onBannerAction: handle(_:),
+                       onFirstChoice: enableAfterFirstChoice)
+                .task {
+                    model.startWatching()
+                    await reconcile()
+                }
         }
         .windowResizability(.contentSize)
+    }
+
+    // MARK: - Agent ↔ window
+
+    /// Run at launch. Surveys the machine, repairs the one condition that can be repaired
+    /// without asking, and tells the window what is true.
+    ///
+    /// **Only `.moved` is repaired automatically, and only when a registration already
+    /// exists.** That verdict comes from the path this app recorded when it registered, so it
+    /// is not an inference — the app is not where it registered from, and nothing else will
+    /// notice. `.stale` is deliberately *not* repaired: a job that has run in the last minute
+    /// sits at "spawn scheduled" because of ThrottleInterval 60, which is indistinguishable at
+    /// this moment from a job that will never spawn again, and tearing down a healthy
+    /// registration is worse than showing a button. And with no record at all nothing is
+    /// registered automatically: the first registration adds a login item, which is the user's
+    /// decision to make in onboarding.
+    @MainActor
+    private func reconcile() async {
+        let survey = InstallSurvey.take()
+        if case .moved(let from) = survey.verdict {
+            let outcome = await Task.detached { Migration.repair() }.value
+            agent.absorb(outcome, label: "auto-repair after a move")
+            model.setAgent(outcome.ok ? .repairedAfterMove(from: from)
+                                      : condition(for: outcome.survey))
+        } else {
+            model.setAgent(condition(for: survey))
+        }
+        model.reloadAll()
+    }
+
+    @MainActor
+    private func condition(for survey: InstallSurvey) -> AppModel.AgentCondition {
+        switch survey.verdict {
+        case .healthy:          return .healthy
+        case .requiresApproval: return .needsApproval
+        case .legacyPresent:    return .legacyPresent
+        case .notRegistered:    return .notRegistered
+        // Both mean "nothing from this bundle is running the label right now", which is the
+        // same sentence to the user and the same repair.
+        case .stale, .foreignBundle, .moved:
+            return .notRunning
+        }
+    }
+
+    @MainActor
+    private func handle(_ action: AppModel.Banner.Action) {
+        switch action {
+        case .openLoginItems:
+            agent.openLoginItems()
+        case .repairAgent:
+            run { Migration.repair() }
+        case .migrateLegacy:
+            run { Migration.migrate() }
+        }
+    }
+
+    /// The first "Keep <device>" writes the config through the CLI. That alone leaves a
+    /// configured machine with no daemon, so this is where the login item is actually created —
+    /// after the user has made a deliberate choice, never at launch.
+    @MainActor
+    private func enableAfterFirstChoice() {
+        run { Migration.migrate() }
+    }
+
+    @MainActor
+    private func run(_ body: @escaping @Sendable () -> Migration.Outcome) {
+        Task {
+            let outcome = await Task.detached(priority: .userInitiated) { body() }.value
+            agent.absorb(outcome, label: "window action")
+            model.setAgent(condition(for: outcome.survey))
+            model.reloadAll()
+        }
     }
 }
 
 /// docs/app-design.md, "Process model": quitting the app must never look like it stops the
-/// feature, and there is nothing for the GUI to do once its window is gone. launchd holds
-/// the daemon.
+/// feature, and there is nothing for the GUI to do once its window is gone. launchd holds the
+/// daemon.
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         true
-    }
-}
-
-struct HarnessView: View {
-    let agent: AgentController
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Stage 2–3 harness — not the shipping interface")
-                .font(.headline)
-            Text("Registers, migrates and repairs the background agent, and shows exactly "
-                 + "what ServiceManagement and launchd reported. Nothing here is designed.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            Divider()
-
-            // Two readings, deliberately side by side. SMAppService answers for whatever
-            // holds the label; the verdict answers for this bundle. Stage 2 measured them
-            // disagreeing — `.enabled`, about somebody else's agent.
-            LabeledContent("Status") {
-                Text(AgentController.describe(agent.status))
-                    .font(.system(.body, design: .monospaced))
-                    .foregroundStyle(agent.status == .enabled ? .primary : .secondary)
-            }
-            LabeledContent("Verdict") {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(agent.survey.verdictName)
-                        .font(.system(.body, design: .monospaced))
-                    Text(agent.survey.explanation)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            LabeledContent("Running from") {
-                Text(agent.survey.job.runningExecutable?.path ?? "nothing is running")
-                    .font(.system(.caption, design: .monospaced))
-                    .textSelection(.enabled)
-                    .lineLimit(2)
-                    .truncationMode(.head)
-            }
-            LabeledContent("Legacy plist") {
-                Text(agent.survey.legacyPlistExists ? "PRESENT — must be torn down first"
-                                                    : "absent")
-                    .font(.system(.caption, design: .monospaced))
-            }
-            LabeledContent("Registered from") {
-                Text(agent.survey.registeredFrom?.bundlePath ?? "no record")
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundStyle(agent.survey.hasMoved ? .primary : .secondary)
-                    .textSelection(.enabled)
-                    .lineLimit(2)
-                    .truncationMode(.head)
-            }
-            LabeledContent("CLI on PATH") {
-                Text(agent.survey.cli.description)
-                    .font(.system(.caption, design: .monospaced))
-                    .textSelection(.enabled)
-            }
-            LabeledContent("Plist") {
-                Text(AgentController.plistName)
-                    .font(.system(.body, design: .monospaced))
-            }
-            LabeledContent("Bundle") {
-                Text(Bundle.main.bundleURL.path)
-                    .font(.system(.caption, design: .monospaced))
-                    .textSelection(.enabled)
-                    .lineLimit(2)
-                    .truncationMode(.head)
-            }
-
-            // Stage 3. Survey changes nothing; Link CLI is the "after asking" in
-            // docs/app-design.md's migration flow, which is why it is a button and never
-            // something the app does on its own.
-            HStack {
-                Button("Survey") { agent.takeSurvey() }
-                Button("Migrate") { agent.migrate() }
-                Button("Repair") { agent.repair() }
-                Button("Link CLI…") { agent.linkCLI() }
-                if agent.busy { ProgressView().controlSize(.small) }
-            }
-            .disabled(agent.busy)
-
-            // Stage 2. Raw SMAppService, nothing interpreted.
-            HStack {
-                Button("Register") { agent.register() }
-                Button("Unregister") { agent.unregister() }
-                Button("Re-register") { agent.reregister() }
-                Button("Refresh") { agent.refresh() }
-            }
-            .disabled(agent.busy)
-            HStack {
-                Button("Open Login Items…") { agent.openLoginItems() }
-                Spacer()
-                Button("Copy transcript") {
-                    let board = NSPasteboard.general
-                    board.clearContents()
-                    board.setString(agent.copyTranscript(), forType: .string)
-                }
-            }
-
-            Divider()
-
-            Text("Transcript")
-                .font(.subheadline.weight(.semibold))
-            ScrollView {
-                VStack(alignment: .leading, spacing: 2) {
-                    ForEach(agent.transcript) { entry in
-                        Text(entry.text)
-                            .font(.system(.caption, design: .monospaced))
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                }
-                .padding(4)
-            }
-            .frame(height: 220)
-            .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
-        }
-        .padding(20)
-        .frame(width: 680)
     }
 }

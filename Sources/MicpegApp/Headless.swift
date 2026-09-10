@@ -9,6 +9,7 @@
 //   Micpeg.app/Contents/MacOS/MicpegApp status
 //   Micpeg.app/Contents/MacOS/MicpegApp register | unregister | reregister
 //   Micpeg.app/Contents/MacOS/MicpegApp survey | migrate | repair | link
+//   Micpeg.app/Contents/MacOS/MicpegApp meter [seconds]
 //
 // The second line is stage 2's: raw SMAppService calls, nothing else. The third is stage 3's
 // and answers a different question — not "what did ServiceManagement return" but "what is
@@ -20,9 +21,14 @@
 // reverse question ("am I inside a bundle") when reached through a PATH symlink. Here the
 // path is direct.
 //
-// This file is part of the stage 2 harness and is expected to be deleted at stage 4.
+// Written as part of the stage 2 harness and expected to be deleted at stage 4. That
+// prediction was wrong and the file stays: stage 3 turned `survey` into the diagnostic this
+// project actually reaches for, and CLAUDE.md now documents it as the development workflow.
+// The harness *window* is gone — MicpegUI replaced it — but a diagnostic that can be pasted
+// into docs/verification.md and run again is worth more than one that needs a mouse.
 
 import Foundation
+import MicpegUI
 import ServiceManagement
 
 enum Headless {
@@ -63,6 +69,12 @@ enum Headless {
             outcome.lines.forEach(report)
             failed = !outcome.ok
 
+        case "meter":
+            // Stage 4. The level meter is the only custom-drawn element, and a bar that never
+            // moves looks the same as a muted microphone. This prints the numbers behind it.
+            let seconds = Double(CommandLine.arguments.dropFirst(2).first ?? "") ?? 5
+            failed = !runMeter(seconds: seconds)
+
         case "link":
             // Replace ~/.local/bin/micpeg with a symlink into this bundle. Explicit on
             // purpose: it is the user's file, and the migration only ever offers this.
@@ -98,7 +110,7 @@ enum Headless {
 
         default:
             FileHandle.standardError.write(Data(
-                "usage: MicpegApp [status|register|unregister|reregister|survey|migrate|repair|link]\n".utf8))
+                "usage: MicpegApp [status|register|unregister|reregister|survey|migrate|repair|link|meter]\n".utf8))
             exit(2)
         }
 
@@ -117,6 +129,55 @@ enum Headless {
             failed = true
         }
         exit(failed ? 1 : 0)
+    }
+
+    /// Runs the same tap the meter uses and prints a summary rather than a stream, because
+    /// what matters is whether anything arrived at all and how loud it was.
+    private static func runMeter(seconds: Double) -> Bool {
+        report("opening the default input for \(seconds)s — this uses the microphone")
+        let samples = Samples()
+        let finished = DispatchSemaphore(value: 0)
+        var failure: String?
+        InputTest.measure(seconds: seconds, report: { samples.add($0) }) { error in
+            failure = error
+            finished.signal()
+        }
+        if finished.wait(timeout: .now() + seconds + 10) == .timedOut {
+            report("TIMED OUT waiting for the tap to finish")
+            return false
+        }
+        if let failure {
+            report("FAILED: \(failure)")
+            return false
+        }
+        let (count, peak, mean) = samples.summary()
+        report("buffers:  \(count)")
+        report("peak RMS: \(String(format: "%.5f", peak))")
+        report("mean RMS: \(String(format: "%.5f", mean))")
+        if count == 0 {
+            report("NOTHING ARRIVED — the tap was installed and never called. That is not a"
+                 + " quiet room; it is a stream that is not running.")
+            return false
+        }
+        let threshold = InputTest.silenceThreshold
+        report(peak > threshold
+               ? "audio is reaching the microphone (the window's silence threshold is"
+                 + " \(threshold))"
+               : "everything is below the window's \(threshold) silence threshold — the window"
+                 + " would say \"No sound is reaching this microphone\"")
+        return true
+    }
+
+    private final class Samples: @unchecked Sendable {
+        private var values: [Float] = []
+        private let lock = NSLock()
+        func add(_ v: Float) { lock.lock(); values.append(v); lock.unlock() }
+        func summary() -> (Int, Float, Float) {
+            lock.lock(); defer { lock.unlock() }
+            guard !values.isEmpty else { return (0, 0, 0) }
+            return (values.count, values.max() ?? 0,
+                    values.reduce(0, +) / Float(values.count))
+        }
     }
 
     private static func attempt(_ label: String, _ body: () throws -> Void) -> Bool {

@@ -99,9 +99,9 @@ Targets marked `(planned)` do not exist yet — see the build order at the end o
 ```
 Sources/MicpegAudio/       # read-only CoreAudio helpers, shared. No writes.
 Sources/micpeg/main.swift  # daemon + CLI. Owns the only setDefaultInputDevice call.
-Sources/MicpegUI/          # (planned) SwiftUI views (library target, so previews work)
+Sources/MicpegUI/          # the window: views, models, file/device watching, the level meter.
+                           #   a library target, so #Preview registers with Xcode's canvas
 Sources/MicpegApp/         # @main, survey, migration, registration record. Thin.
-                           #   stages 2-3 are a test harness, replaced at stage 4
 bundle/                    # Info.plist, agent plist, entitlements — inputs to bundle.sh
 scripts/install.sh         # source build + install, for developers
 scripts/invariants.sh      # the structural greps above; CI runs it
@@ -134,6 +134,7 @@ launchctl kill SIGHUP gui/$(id -u)/com.micpeg.agent # reload config
 /Applications/Micpeg.app/Contents/MacOS/MicpegApp migrate   # tear down the legacy agent, register
 /Applications/Micpeg.app/Contents/MacOS/MicpegApp repair    # unregister + register, confirmed
 /Applications/Micpeg.app/Contents/MacOS/MicpegApp link      # put micpeg on PATH, into the bundle
+/Applications/Micpeg.app/Contents/MacOS/MicpegApp meter     # RMS from the default input
 ```
 
 **`survey` is the one to reach for.** `status` and `launchctl print` each answer a narrower
@@ -152,6 +153,11 @@ one session while stage 2 was being worked out. Use it only when the Background 
 record's own contents are the question. Nothing micpeg ships ever asks for an administrator
 password; registering a LaunchAgent is a per-user operation.
 
+**Inspect the window through the accessibility API, not by looking at it** — and not with
+AppleScript, whose `title of` is empty for every SwiftUI control because SwiftUI publishes
+labels as `AXDescription`. Two stage 4 defects were only visible in the tree, and one
+non-defect looked like a serious accessibility bug because the wrong attribute was read.
+
 **Testing rule: an idle daemon with dead listeners is indistinguishable from a healthy one.**
 Never conclude a change is safe from a quiet log. Provoke real events — connect the headset,
 unplug and replug the mic, `sudo killall coreaudiod` — and read the transitions.
@@ -167,7 +173,14 @@ The first of those is no longer hypothetical. With a legacy agent holding the la
 about the legacy agent. **Never treat `SMAppService.status` as evidence that the agent is
 running.** The check that means something is `state.json`'s `updated` timestamp moving.
 
-Stage 3 added a second one, and it is subtler because the evidence looks good. **A running
+Stage 4 added two more, both measured. **A `DispatchSource` on `state.json`'s own file
+descriptor goes deaf after one write** — the daemon writes atomically, so the descriptor stays
+open on an inode that is no longer at the path. Watch the directory. And **a level meter needs
+its threshold calibrated against a working microphone**: a quiet room reads RMS ~0.0017 while a
+device delivering nothing reads exactly 0.00000, so a plausible-looking 0.01 tells a working
+microphone it is silent. `MicpegApp meter` exists to keep that honest.
+
+Stage 3 added another, and it is subtler because the evidence looks good. **A running
 daemon whose executable is inside this bundle does not mean the registration is intact.** A
 shell `mv` carries the bundle's inode, so the process that was already running reports the
 *new* path while launchd still fails to spawn the next one (`EX_CONFIG`), and nothing repairs

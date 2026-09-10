@@ -806,3 +806,177 @@ Both `install` and `uninstall` are refused, and `~/Library/LaunchAgents` stayed 
 the verdict, and repairing is a button. Doing launchd surgery as a side effect of opening a
 window, with no interface yet to say what happened, is a stage 4 decision and should be made
 there deliberately rather than inherited from a test harness.
+
+---
+
+### Stage 4 — the interface
+
+Built as `Sources/MicpegUI` (a library target, so previews can build it) plus a thin
+`MicpegApp`. Verified on the running, signed app in `/Applications`, not in a build directory.
+
+The window was inspected through the accessibility API rather than by looking at it — the same
+discipline as everywhere else in this project, and it turned out to be the only way to catch
+two of the defects below. `MicpegApp meter` prints the numbers behind the level meter for the
+same reason.
+
+| Check | Result |
+|---|---|
+| The window builds its state from real files and devices | PASS — Output/Input rows, summary sentence and activity all rendered from the live machine |
+| The window updates while it is open | PASS — device change reflected in the Input row, the summary and the activity list, with no relaunch |
+| A `state.json` watcher survives the daemon's atomic writes | PASS — but only by watching the directory. The file-descriptor watch went deaf after one write |
+| Daemon vocabulary never reaches the window | PASS — no `PINNED`/`YIELDED`/`BACKOFF` in the accessibility tree |
+| Buttons and headings carry accessible names | PASS — SwiftUI publishes them as `AXDescription`, not `AXTitle` |
+| The level meter is hidden from assistive technology | PASS — absent from the tree |
+| Microphone permission is requested at Start Test, never at launch | PASS — TCC created the record on the first press |
+| `AVAudioEngine` recovers from a device change mid-test | PASS |
+| The silence hint fires only when nothing is arriving | **FAIL, then fixed** — the first threshold called a working microphone silent |
+| The device list offers only real microphones | **FAIL, then fixed** — the app's own input test conjured an aggregate device into the picker |
+| The window sizes to its content | **FAIL, then fixed** — a `Form` is a scroll view |
+| SwiftUI previews build against a SwiftPM library target | PASS as far as a command line can tell — see below |
+
+#### 14. The obvious file watcher is the broken one
+
+CLAUDE.md lists "a `state.json` watcher that dies on the first atomic write" as one of this
+app's silent failures. It is real, and it was measured rather than assumed. Both watchers ran
+against the same directory while five atomic writes were made:
+
+```
+atomic writes performed:         5
+directory watch callbacks:       6      (one on attach, then one per write)
+file-descriptor watch callbacks: 1
+```
+
+The daemon writes with `Data.write(to:options:.atomic)` — a temporary file and a rename — so a
+`DispatchSource` attached to the file's descriptor keeps that descriptor open on an inode that
+is no longer at the path. It reports once and then never fires again. Nothing crashes and
+nothing is logged; the window simply keeps showing whatever it read at launch.
+
+`DirectoryWatch` watches the enclosing directory, where a rename is an ordinary write, and
+re-reads from the path.
+
+#### 15. The level meter's threshold was calibrated against a working microphone, badly
+
+`MicpegApp meter` opens the default input for a few seconds and reports what arrived:
+
+| Device | Buffers | Peak RMS | Mean RMS |
+|---|---|---|---|
+| Elgato Wave, quiet room | 41 in 4 s | 0.00218 | 0.00170 |
+| Elgato Wave, sound playing | 52 in 5 s | 0.00334 | 0.00208 |
+| MacBook Pro Microphone, lid closed | 83 in 8 s | **0.00000** | **0.00000** |
+
+The first threshold was `0.01`, and the window told a working microphone in a quiet room that
+no sound was reaching it — the precise false alarm the hint exists to prevent. A room's noise
+floor is thousandths. A device delivering nothing is exactly zero. The threshold now sits in
+that gap at `0.0005`.
+
+The third row is not a fault. With the lid shut and an external display driving the Mac, the
+built-in microphone is still listed, still unmuted (`kAudioDevicePropertyMute` = 0), still
+reports an input volume of 0.41 — and delivers buffers of zeros. `AVAudioApplication.shared
+.isInputMuted` is `false` throughout. So the hint now names that cause first when the silent
+device is the built-in one; sending the user to hunt for a mute switch would have been wrong
+every time.
+
+The meter's own curve changed with it. A cube root put a silent room a fifth of the way up the
+bar; it is now the ordinary decibel mapping with a −60 dBFS floor.
+
+#### 16. The app's own input test put a fake device in the picker
+
+With the input test running, the device sheet offered:
+
+```
+MW's iPhone Microphone, ccwd
+Elgato Wave:1, usb
+MacBook Pro Microphone, bltn
+CADefaultDeviceAggregate-88269-1, grup      ← not a microphone
+```
+
+The HAL publishes a transient aggregate device while any application holds the default input
+open, and it has an input scope, so it passed every filter the list had. It disappeared when
+the test stopped — which is why nothing showed it until the sheet and the test were open at the
+same time. Any application using the microphone produces one; this is not specific to micpeg.
+
+`kAudioDevicePropertyIsHidden` is not the discriminator: every input device on this machine
+reports `0`, the aggregate included. Aggregate-transport devices are now excluded from the
+window's list. That hides a deliberately built Aggregate Device too, which is the right trade
+for this audience and is not a dead end — `micpeg list` still shows them and `micpeg pick <uid>`
+still pins one.
+
+#### 17. Two measurement artifacts that were not defects
+
+Worth recording so they are not "fixed" later.
+
+**Buttons appeared to have no accessible name.** AppleScript's `title of` returned
+`missing value` for every button, which reads as a serious accessibility defect. It is not:
+SwiftUI publishes a button's label as `AXDescription`. Read with the accessibility API
+directly, the tree carries `Start Test`, `Change Microphone`, `Pause` and a `Recent activity`
+heading. The same mistake hid the whole device sheet, whose rows are `AXOutline` → `AXRow` →
+`AXCell` → `AXButton` and were simply below the depth the first dump printed.
+
+**The window looked like it was scrolling.** Scrollbar increment and decrement buttons in the
+accessibility tree are what a `Form` produces on macOS whether or not its content overflows.
+The content did fit. `.scrollDisabled(true)` is still correct — app-ui.md asks for a window
+fixed to its content size — but the scrollbars were not evidence of a problem.
+
+#### 18. What the interface was measured doing
+
+Live, on the machine, with the window open and untouched throughout:
+
+```
+                     Input row              Summary
+before               Elgato Wave:1          Elgato Wave:1 stays your microphone.
+another app steals   MacBook Pro Microphone You chose MacBook Pro Microphone, so Elgato
+                                            Wave:1 is not being restored. Choosing Elgato
+                                            Wave:1 again resumes it.
+micpeg on            Elgato Wave:1          Elgato Wave:1 stays your microphone.
+```
+
+and the activity list, translated out of the daemon's vocabulary:
+
+```
+Moved your microphone back to Elgato Wave:1 from MacBook Pro Microphone.
+You chose MacBook Pro Microphone, so Micpeg stepped aside.
+Selected Elgato Wave:1.
+```
+
+Pause writes `enabled: false` through the CLI, the button becomes `Resume`, and the summary
+becomes "Micpeg is paused. Your microphone can change freely." Resume reverses it. Stopping the
+test releases the microphone; the app writes nothing to its own stderr in a whole session.
+
+#### 19. Previews, as far as a command line can prove it
+
+`#Preview` in the library target expands to `DeveloperToolsSupport.PreviewRegistry`
+conformances carrying `fileID` and `line` — which is exactly what Xcode's canvas discovers:
+
+```
+struct $s8MicpegUI…PreviewRegistryfMu_: DeveloperToolsSupport.PreviewRegistry {
+    static var fileID: String { "MicpegUI/MainWindow.swift" }
+    static var line: Int { 299 }
+```
+
+Three previews registered. The canvas itself cannot be driven from a shell, so "the preview
+renders" remains unverified; the structural prerequisite — a library target, not an
+`executableTarget` with `@main` — is confirmed.
+
+#### A note on Apple's guidance
+
+`app-ui.md` requires fetching Apple's current documentation rather than implementing from
+recollection. The API halves were read from the SDK Apple ships: `SwiftUI.swiftinterface` and
+`SwiftUICore.swiftinterface` for `Form`, `LabeledContent`, `GroupedFormStyle`,
+`windowResizability`, `scrollDisabled` and `Canvas` (`macOS 12.0`, so fine at this deployment
+target), and `AVAudioEngine.h` / `AVAudioNode.h` / `AVAudioApplication.h` for the audio.
+
+Three facts came from those headers and shaped the code:
+
+- "the engine stops itself and issues this notification" on a configuration change — a device
+  change does not merely disturb the meter, it ends the session.
+- "the engine must not be deallocated from within the client's notification handler because
+  the callback happens on an internal dispatch queue and can deadlock" — the handler does
+  nothing but hop to the main actor.
+- "Only one tap may be installed on any bus."
+
+**The Human Interface Guidelines could not be fetched.** developer.apple.com/design renders its
+prose in JavaScript and the DocC JSON endpoint returns 404, so nothing quotable was obtained;
+search results for margins and spacing are all pre-2022 HIG numbers and were not used. The
+exposure is contained by app-ui.md's own instruction — "Let `Form` supply the inner rhythm; do
+not add manual padding between its rows" — which is followed literally: the window sets one
+width and no margins or inter-row spacing anywhere.

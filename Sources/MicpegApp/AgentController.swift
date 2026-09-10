@@ -19,9 +19,12 @@
 //      re-register the service".
 //
 // register() returning without throwing is not evidence that the agent runs. The header is
-// explicit that a registered service can still be sitting at .requiresApproval, and
-// CLAUDE.md lists exactly that as one of this app's silent failures. So every operation in
-// this file ends by reading `status` again and recording what it read.
+// explicit that a registered service can still be sitting at .requiresApproval, and CLAUDE.md
+// lists exactly that as one of this app's silent failures. Stage 3 settled where that check
+// belongs: Migration.swift re-surveys after every operation and confirms with a pid, that
+// pid's executable inside this bundle, and a state.json written after the call. What is left
+// here is the pieces that have no better home — the plist name, the error and status
+// vocabulary, and the one operation that is pure ServiceManagement.
 
 import Foundation
 import ServiceManagement
@@ -41,113 +44,31 @@ final class AgentController {
 
     private let service = SMAppService.agent(plistName: AgentController.plistName)
 
-    private(set) var status: SMAppService.Status
+    /// Everything this app has done to the registration in this session, and what came back.
+    /// Kept because "register() returned without throwing" is not evidence of anything — the
+    /// transcript is what a bug report needs and what the log would otherwise have to carry.
     private(set) var transcript: [Entry] = []
 
-    /// What is installed on this machine, as of the last look. Stage 3: `status` alone was
-    /// never enough — it is keyed on the label, so it answers for whichever agent holds that
-    /// label, including a legacy one this app did not register.
-    private(set) var survey: InstallSurvey
-    /// Set while a migration or repair is running, so the harness can stop a second one being
-    /// started underneath the first.
-    private(set) var busy = false
-
     init() {
-        status = service.status
-        survey = InstallSurvey.take()
-        note("launched: status = \(Self.describe(status))")
+        note("launched: status = \(Self.describe(service.status))")
         note("bundle: \(Bundle.main.bundleURL.path)")
         note("BundleProgram target: \(Self.bundleProgramReport())")
-        note("survey: \(survey.verdictName) — \(survey.explanation)")
     }
 
     // MARK: - Operations
 
-    func refresh() {
-        status = service.status
-        survey = InstallSurvey.take()
-        note("refresh: status = \(Self.describe(status)), survey = \(survey.verdictName)")
+    /// Record what a migration or repair actually did. The window shows a one-line verdict;
+    /// this keeps the evidence behind it.
+    func absorb(_ outcome: Migration.Outcome, label: String) {
+        note("\(label): \(outcome.ok ? "reached a healthy state" : "DID NOT reach a healthy state")")
+        outcome.lines.forEach { note("  " + $0) }
     }
 
-    // MARK: - Stage 3
-
-    /// Read everything, change nothing.
-    func takeSurvey() {
-        survey = InstallSurvey.take()
-        note("survey:")
-        survey.lines().forEach { note("  " + $0) }
-    }
-
-    /// Tear down the legacy LaunchAgent if there is one, then register this bundle.
-    func migrate() { run("migrate") { Migration.migrate() } }
-
-    /// unregister() then register(), for a registration that no longer resolves here.
-    func repair() { run("repair") { Migration.repair() } }
-
-    /// Offer only — see Migration.linkCLI(). Never called on the app's own initiative.
-    func linkCLI() { run("link") { Migration.linkCLI() } }
-
-    /// These block: they wait on launchd, on a completion handler, and on the daemon writing
-    /// its state file. None of that belongs on the main actor, and a window that stops
-    /// redrawing while it happens would hide exactly the delay worth seeing.
-    private func run(_ label: String, _ body: @escaping @Sendable () -> Migration.Outcome) {
-        guard !busy else { return }
-        busy = true
-        note("\(label): started")
-        Task.detached(priority: .userInitiated) {
-            let outcome = body()
-            await MainActor.run {
-                outcome.lines.forEach { self.note("  " + $0) }
-                self.note("\(label): \(outcome.ok ? "ok" : "DID NOT REACH A HEALTHY STATE")")
-                self.survey = outcome.survey
-                self.status = self.service.status
-                self.busy = false
-            }
-        }
-    }
-
-    func register() {
-        do {
-            try service.register()
-            note("register(): returned without throwing")
-        } catch {
-            note("register(): threw \(Self.describe(error))")
-        }
-        refresh()
-        warnIfRegisteredButNotEnabled()
-    }
-
-    func unregister() {
-        do {
-            try service.unregister()
-            note("unregister(): returned without throwing")
-        } catch {
-            note("unregister(): threw \(Self.describe(error))")
-        }
-        refresh()
-    }
-
-    /// Unregister, wait for the old process to be reaped, then register again.
-    ///
-    /// This is the sequence SMAppService.h prescribes after the executable inside the bundle
-    /// has changed. Doing it as two independent button presses would race: the synchronous
-    /// `unregister()` "will not wait for the service to be reaped".
-    func reregister() {
-        note("reregister(): unregistering, then registering once the old process is gone")
-        service.unregister { error in
-            Task { @MainActor in
-                if let error {
-                    // kSMErrorJobNotFound here just means it was not registered to begin
-                    // with, which is not a reason to skip the register below.
-                    self.note("  unregister completion: \(Self.describe(error))")
-                } else {
-                    self.note("  unregister completion: no error")
-                }
-                self.register()
-            }
-        }
-    }
-
+    /// The only correct response to `.requiresApproval`. Measured in stage 2: `register()`
+    /// throws "Operation not permitted" there and an unregister-then-register snaps straight
+    /// back, so nothing the app can call will undo it. Taking the user to the switch is the
+    /// whole remedy — and telling them to "go to System Settings" without taking them there is
+    /// where this flow usually dies.
     func openLoginItems() {
         note("openSystemSettingsLoginItems()")
         SMAppService.openSystemSettingsLoginItems()
@@ -155,24 +76,6 @@ final class AgentController {
 
     func copyTranscript() -> String {
         transcript.map { "\(Self.stamp.string(from: $0.at))  \($0.text)" }.joined(separator: "\n")
-    }
-
-    // MARK: - Reporting
-
-    private func warnIfRegisteredButNotEnabled() {
-        switch status {
-        case .enabled:
-            break
-        case .requiresApproval:
-            note("  NOTE: registered, but launchd will not run it until it is enabled in"
-                 + " System Settings > General > Login Items & Extensions.")
-        case .notRegistered, .notFound:
-            note("  NOTE: register() reported success but the status is"
-                 + " \(Self.describe(status)). Treat this as a failure, not as something"
-                 + " to retry silently.")
-        @unknown default:
-            break
-        }
     }
 
     private func note(_ text: String) {
@@ -184,6 +87,8 @@ final class AgentController {
         f.dateFormat = "HH:mm:ss.SSS"
         return f
     }()
+
+    // MARK: - Reporting
 
     nonisolated static func describe(_ status: SMAppService.Status) -> String {
         switch status {
