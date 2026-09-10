@@ -91,9 +91,19 @@ public final class AppModel {
         self.cli = cli
     }
 
+    /// How many windows are currently relying on the watchers.
+    ///
+    /// `WindowGroup` gives File ▸ New Window for free, and this model is one `@State` shared
+    /// by all of them. Stopping on the first `onDisappear` released the HAL listeners and the
+    /// directory watcher out from under every other window, and `startWatching`'s guard meant
+    /// they never came back: the surviving window kept showing what it last read and silently
+    /// stopped updating.
+    private var watchers = 0
+
     /// Start watching. Separate from init so a preview can build a model without attaching
     /// HAL listeners or file descriptors.
     public func startWatching() {
+        watchers += 1
         guard fileWatch == nil else { return }
         fileWatch = DirectoryWatch(directory: DaemonPaths.directory) { [weak self] in
             self?.reloadFiles()
@@ -103,10 +113,12 @@ public final class AppModel {
         }
     }
 
-    /// Releases the directory descriptor, its dispatch source and the three HAL listeners.
-    /// The window calls this when it disappears; without it they stayed installed for the
-    /// life of the process, watching for a window that was gone.
+    /// Releases the directory descriptor, its dispatch source and the three HAL listeners —
+    /// once the last window has gone. Without it they stayed installed for the life of the
+    /// process, watching for a window that was not there.
     public func stopWatching() {
+        watchers = max(0, watchers - 1)
+        guard watchers == 0 else { return }
         fileWatch = nil
         deviceWatch = nil
     }

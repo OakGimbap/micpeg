@@ -33,8 +33,18 @@ import ServiceManagement
 
 enum Headless {
     /// Runs the requested operation and never returns if there was one.
+    /// The verbs this front end answers to. Membership is checked before anything else
+    /// because `runIfRequested()` is called from `App.init()`: treating *any* first argument
+    /// as a command meant an argument the system or a launcher injects — Xcode's
+    /// `-NSDocumentRevisionsDebugMode`, or `open --args -AppleLanguages '("ko")'`, which the
+    /// planned Korean localization makes likely — exited the process with status 2 before a
+    /// window existed, with nothing on screen to say why.
+    static let verbs: Set<String> = ["status", "survey", "migrate", "repair", "link", "meter",
+                                     "register", "unregister", "reregister"]
+
     static func runIfRequested() {
-        guard let command = CommandLine.arguments.dropFirst().first else { return }
+        guard let command = CommandLine.arguments.dropFirst().first,
+              verbs.contains(command) else { return }
 
         let service = SMAppService.agent(plistName: AgentController.plistName)
         report("bundle: \(Bundle.main.bundleURL.path)")
@@ -109,8 +119,10 @@ enum Headless {
             failed = !attempt("register()") { try service.register() } || failed
 
         default:
+            // Unreachable: `verbs` gates the entry. Kept so adding a verb to the set without
+            // adding a case here fails loudly rather than falling through to "status".
             FileHandle.standardError.write(Data(
-                "usage: MicpegApp [status|register|unregister|reregister|survey|migrate|repair|link|meter]\n".utf8))
+                "MicpegApp: \(command) is in the verb set but has no implementation\n".utf8))
             exit(2)
         }
 
