@@ -8,6 +8,11 @@
 //
 //   Micpeg.app/Contents/MacOS/MicpegApp status
 //   Micpeg.app/Contents/MacOS/MicpegApp register | unregister | reregister
+//   Micpeg.app/Contents/MacOS/MicpegApp survey | migrate | repair | link
+//
+// The second line is stage 2's: raw SMAppService calls, nothing else. The third is stage 3's
+// and answers a different question — not "what did ServiceManagement return" but "what is
+// actually installed on this machine and what is running". `survey` changes nothing.
 //
 // Bundle.main still resolves to the enclosing .app when the executable is invoked by path,
 // so this exercises the same registration the GUI would — that is worth stating because the
@@ -34,6 +39,37 @@ enum Headless {
         switch command {
         case "status":
             break
+
+        // MARK: stage 3
+
+        case "survey":
+            // Read-only. Everything the app can learn without touching anything.
+            let survey = InstallSurvey.take()
+            report("")
+            survey.lines().forEach(report)
+            failed = !survey.verdict.isHealthy
+
+        case "migrate":
+            // Tear down the legacy LaunchAgent if there is one, then register this bundle.
+            let outcome = Migration.migrate()
+            report("")
+            outcome.lines.forEach(report)
+            failed = !outcome.ok
+
+        case "repair":
+            // unregister() then register(), for a registration that no longer resolves here.
+            let outcome = Migration.repair()
+            report("")
+            outcome.lines.forEach(report)
+            failed = !outcome.ok
+
+        case "link":
+            // Replace ~/.local/bin/micpeg with a symlink into this bundle. Explicit on
+            // purpose: it is the user's file, and the migration only ever offers this.
+            let outcome = Migration.linkCLI()
+            report("")
+            outcome.lines.forEach(report)
+            failed = !outcome.ok
 
         case "register":
             failed = !attempt("register()") { try service.register() }
@@ -62,7 +98,7 @@ enum Headless {
 
         default:
             FileHandle.standardError.write(Data(
-                "usage: MicpegApp [status|register|unregister|reregister]\n".utf8))
+                "usage: MicpegApp [status|register|unregister|reregister|survey|migrate|repair|link]\n".utf8))
             exit(2)
         }
 
@@ -70,8 +106,13 @@ enum Headless {
         // returns without throwing and leaves the service at .requiresApproval is the
         // silent success CLAUDE.md names as one of this app's failure modes.
         let after = service.status
+        report("")
         report("status after:  \(AgentController.describe(after))")
-        if command != "unregister", after != .enabled {
+        // The stage 3 commands have already reported a verdict drawn from more than this
+        // status, and stage 2 measured that `.enabled` can be true of somebody else's agent.
+        // Do not overwrite their answer with this one.
+        let judgedBySMAppServiceAlone = ["status", "register", "reregister"].contains(command)
+        if judgedBySMAppServiceAlone, after != .enabled {
             report("NOT ENABLED — launchd will not run the agent in this state.")
             failed = true
         }

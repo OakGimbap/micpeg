@@ -213,7 +213,9 @@ Reusing the legacy label looks like it invites a collision with installations th
 A *new* label would let the legacy agent and the bundled agent run **at the same time**. Two
 daemons enforcing the same pin would each see the other's write as a change to judge, and three
 reverts inside five seconds is precisely the `BACKOFF` trigger. One shared label prevents that,
-and that reason stands.
+and that reason stands — stage 3 tried to reach the two-daemon state from both directions on a
+real machine and could not. Whichever way round the legacy plist and the registration were
+created, exactly one daemon ran. What varied was *which* one, and whether anything said so.
 
 **The rest of the original argument does not.** It claimed launchd would refuse the second
 registration and make the conflict loud. Measured, it does the opposite: with the legacy agent
@@ -222,8 +224,17 @@ running, `register()` returns without throwing, changes nothing, and `status` re
 not on the bundle. See [`verification.md`](verification.md). Two consequences:
 
 - **Migration is mandatory, not a nicety.** The app must find the legacy plist on disk and tear
-  it down *before* registering. `SMAppService.statusForLegacyPlist(at:)` takes a
-  `~/Library/LaunchAgents` URL and exists for this.
+  it down *before* registering — **from the file, not from an API**. `statusForLegacyPlist(at:)`
+  looked like the tool for this and is not: `SMAppService.h` says it is for apps "unable to
+  adopt the new daemon and agent packaging guidelines" that still want to notice a user
+  disabling their legacy helpers, and measured, it is keyed on the label like `status` is. It
+  reported `enabled` for a plist launchd was ignoring completely. Stage 3 calls it and records
+  the answer as evidence; nothing depends on it.
+- **A legacy plist arriving on disk can switch a registration back on by itself.** Measured:
+  after `unregister()`, writing the plist with no `launchctl bootstrap` produced a running
+  daemon within a second — the bundle's daemon, under the original `BTM uuid`, ignoring the
+  plist's own `ProgramArguments`. The Background Task Management record survives `unregister()`
+  and the label is enough to revive it. See [`verification.md`](verification.md).
 - **`SMAppService.status` is not a liveness check.** The only honest confirmation that the
   agent registered here is running is `state.json` — the timestamp has to move. That is a check
   the app needs anyway.
@@ -245,10 +256,16 @@ Neither changes the decision — the manual path was worse on both counts, and n
 reason to go back to writing a plist into `~/Library/LaunchAgents`. But it changes what the app
 must do:
 
-- **The app has to re-register itself when it notices it has moved.** Every launch should
-  compare its own bundle path against what the registration resolves to, and repair the
-  difference. Nothing else will, and the symptom is a microphone that quietly stops being
-  pinned.
+- **The app has to re-register itself when it notices it has moved** — and stage 3 measured
+  that "what the registration resolves to" is not a question the system will answer.
+  `launchctl print` gives a bundle-*relative* `program identifier`; `SMAppService` exposes no
+  path; the only source that holds the absolute URL is `sfltool dumpbtm`, which demands an
+  administrator password and is therefore out of the question for a shipping app.
+  `proc_pidpath()` on the running daemon is close and still wrong: a shell `mv` carries the
+  inode, so the process reports the *new* path while the registration is broken, and the check
+  reads healthy. **So the app records its own bundle path when it registers** and compares
+  against that. One-way evidence: no record proves nothing, so it can only withdraw a healthy
+  verdict, never grant one.
 - **Repair means `unregister()` then `register()`, verified through `launchctl`.** A bare
   `register()` over a purged record creates a new BTM entry while leaving the old launchd job
   in place, and the next spawn fails with `EX_CONFIG` — measured. `unregister()` also does
@@ -272,11 +289,18 @@ Two states need real handling, not just a success path:
 legacy ~/Library/LaunchAgents/com.micpeg.agent.plist present?
   yes → launchctl bootout gui/$UID/com.micpeg.agent
         remove the plist
-        if ~/.local/bin/micpeg is a regular file → replace with a symlink into the
-          bundle, after asking
+        if ~/.local/bin/micpeg is a regular file → offer to replace it with a symlink
+          into the bundle. Offer only; it is the user's file
   no  → continue
 SMAppService.agent(plistName:).register()
+record this bundle's path as the registration's origin
+wait for proof: a pid, that pid's executable inside this bundle, and a state.json
+  written since register() was called
 ```
+
+None of those three is optional. `register()` returning proves nothing, `status` answers for
+whichever agent holds the label, and a pid alone survives a move that has already broken the
+registration.
 
 `~/.config/micpeg/config.json` is **not touched**. An existing user keeps their pinned target
 across the upgrade, which is the entire point of leaving the config where the daemon already
@@ -387,7 +411,10 @@ Confirm each before building on it, and record results in [`verification.md`](ve
 |---|---|---|
 | `BundleProgram` resolves correctly for an `SMAppService`-registered agent | `launchctl print gui/$UID/com.micpeg.agent` and read the resolved program path | **confirmed** (stage 2) |
 | Replacing the app in place keeps the registration working | `ditto` a new build over it, restart the agent | **confirmed** (stage 2) |
-| Registration survives moving the app | Move to a different directory, restart the agent | **false for a shell `mv`** (stage 2). A Finder move is still open |
+| Registration survives moving the app | Move to a different directory, restart the agent | **not reliably** (stages 2, 3) — one direction survived, the other died with `EX_CONFIG`, and launchd never repairs it |
+| The app can detect that it has moved | Move the bundle, run the survey from the new path | **only from its own record** (stage 3) — `proc_pidpath` reads healthy through a shell `mv` |
+| `statusForLegacyPlist(at:)` answers about the legacy plist | Bootstrap it, then write one launchd ignores, and compare | **false** (stage 3) — it answers about the label, like `status` |
+| A legacy plist on disk is inert until it is bootstrapped | Write it, bootstrap nothing, watch | **false** (stage 3) — it revives the SMAppService record within a second |
 | Deleting the app tears the agent down | Trash the app, then `launchctl print` | **false** (stage 2). Whether emptying the Trash or a login clears it is open |
 | A legacy agent under the same label makes the conflict loud | Bootstrap the old plist, then `register()` | **false** (stage 2) — it is silent, and `status` lies |
 | `.requiresApproval` is reachable | Disable in Login Items, relaunch, observe the status the app reads | **confirmed** (stage 2) — and **not** recoverable in code |

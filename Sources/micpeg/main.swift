@@ -909,16 +909,18 @@ func enclosingAppBundle() -> URL? {
 }
 
 /// One registration path, enforced rather than documented. `micpeg install` writes the
-/// legacy plist under the same label the app registers through SMAppService; run from
-/// inside the bundle it would resurrect the two-agents-one-label conflict that the
-/// shared label exists to make impossible.
+/// legacy plist under the same label the app registers through SMAppService, and the
+/// collision that follows is silent in both directions — measured, docs/verification.md.
+/// The app cannot see the plist unless it goes looking for it, and launchd will not
+/// honour the plist while a Background Task Management record holds the label.
 func refuseInsideBundle(_ command: String) {
     guard let app = enclosingAppBundle() else { return }
     let appName = app.lastPathComponent
     print("error: this copy of micpeg lives inside \(appName), which registers the")
     print("       background agent itself. `micpeg \(command)` manages the separate,")
-    print("       hand-written LaunchAgent, and one label cannot have two registration")
-    print("       paths — that is exactly the conflict the shared label makes loud.")
+    print("       hand-written LaunchAgent under the same label, and one label cannot")
+    print("       have two registration paths. The collision is silent: nothing would")
+    print("       report an error and the microphone would quietly stop being pinned.")
     print("       Open \(appName) to turn the agent on or off.")
     exit(1)
 }

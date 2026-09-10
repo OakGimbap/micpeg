@@ -569,3 +569,240 @@ wipes every background item for every app on the system, so it was not run.
 Treat it as: **the first registration after a legacy uninstall may fail, and an
 `unregister()` + `register()` cycle clears it.** Stage 3 should do that cycle unconditionally
 and verify through `state.json` rather than through the return value.
+
+---
+
+### Stage 3 — migration from the legacy install
+
+Exercised on macOS 26 (Darwin 25.6.0) with the app at `/Applications/Micpeg.app`, signed with
+an Apple Development certificate. Two states were built on purpose and then measured: a
+genuine legacy-only machine (the hand-written LaunchAgent bootstrapped, running
+`~/.local/bin/micpeg`, no app registration anywhere) and a moved-bundle machine. The commands
+are the ones the app itself runs — `MicpegApp survey | migrate | repair | link` — so every
+line below is reproducible without clicking anything.
+
+| Check | Result |
+|---|---|
+| The app detects a legacy LaunchAgent on disk | PASS — from the file, not from the API |
+| `SMAppService.status` can be trusted to tell the app apart from a legacy agent | **FAIL** — it reported `.enabled` for an app that had never registered |
+| `statusForLegacyPlist(at:)` answers about the legacy plist | **FAIL** — it answers about the label. It reported `enabled` for a plist launchd was ignoring |
+| Teardown before registration works | PASS — `bootout` status 0, plist removed, job gone, then a new pid from the bundle |
+| The pinned device survives the upgrade | PASS — `config.json` byte-identical, and enforced by a CI check |
+| `proc_pidpath` alone can detect a moved bundle | **FAIL** — a shell `mv` carries the inode, so the survey read HEALTHY while the registration was broken |
+| The app's own record detects a moved bundle | PASS — the same state now reads `MOVED`, in both directions |
+| `repair()` recovers a job that is `spawn failed` with `EX_CONFIG` | PASS |
+| launchd repairs a broken registration on its own | **no** — 70 s of `spawn failed`, no recovery |
+| Writing the legacy plist can resurrect an unregistered agent | **yes** — with no `launchctl bootstrap` at all |
+| `micpeg install`/`uninstall` are refused through the PATH symlink | PASS |
+
+#### 7. `statusForLegacyPlist(at:)` answers about the label, not about the plist
+
+`app-design.md` said this API "exists for this". It does not. `SMAppService.h`:
+
+> This API is intended for apps that are **unable to adopt** the new daemon and agent packaging
+> guidelines but still want to know when a user disables its legacy daemons or agents.
+
+It is a monitoring API for apps that are *staying* legacy. There are also reports of it
+returning `.notFound` for installed, running services since macOS 14.5
+([developer.apple.com/forums/thread/750685](https://developer.apple.com/forums/thread/750685),
+no Apple reply). That specific bug did not reproduce here — but a worse one did. Measured, in
+order, on one machine:
+
+| State of `~/Library/LaunchAgents/com.micpeg.agent.plist` | `statusForLegacyPlist` |
+|---|---|
+| absent | `notRegistered` |
+| present, genuinely bootstrapped, running `~/.local/bin/micpeg` | `enabled` |
+| present, **not** bootstrapped, launchd running the *bundle* instead | `enabled` |
+| removed again | `notRegistered` |
+
+The third row is the problem. The API said `enabled` about a plist launchd was ignoring
+completely. It is keyed on the label, exactly like `SMAppService.status`, and it inherits the
+same lie. **`InstallSurvey` therefore detects the legacy install from the file on disk and
+records the API's answer as evidence only.**
+
+#### 8. A legacy plist appearing on disk resurrects an unregistered agent
+
+This was found by accident, while trying to build a legacy-only machine, and it is the
+sharpest thing stage 3 measured.
+
+Starting from `unregister()` — job gone, `status` `notRegistered`, confirmed stable for 12 s —
+the legacy plist was written to `~/Library/LaunchAgents` **and nothing else was done**. No
+`launchctl bootstrap`, no `register()`:
+
+```
+t+0s   SMAppService=enabled   statusForLegacyPlist=notRegistered  job=none
+t+1s   SMAppService=enabled   statusForLegacyPlist=enabled        job=present
+       running_from=/Applications/Micpeg.app/Contents/MacOS/micpeg
+```
+
+Within a second there was a running daemon again. Not the one the plist names —
+`ProgramArguments[0]` was `~/.local/bin/micpeg` — but the one inside the bundle, under
+`managed_by = com.apple.xpc.ServiceManagement`, `program identifier = Contents/MacOS/micpeg`,
+and the *same* `BTM uuid` the registration had before it was unregistered. Removing the plist
+again left that job running.
+
+Two consequences:
+
+- **The BTM record is not destroyed by `unregister()`.** It keeps its uuid, and a legacy plist
+  arriving under the same label is enough to switch it back on.
+- **`launchctl bootstrap` of the legacy plist then fails with `Bootstrap failed: 5:
+  Input/output error`** — the label is taken. This is what a user running `micpeg install`
+  after installing the app would see, and it is why the CLI's bundle guard matters.
+
+The one thing that did *not* happen is the two-daemons-one-label disaster the shared label was
+chosen to prevent. On this machine it is not reachable at all: whichever way round it was
+tried, exactly one daemon ran.
+
+#### 9. The upgrade shape: `.enabled` for an app that has never registered
+
+The genuine pre-upgrade machine, with the app freshly dragged into `/Applications` and
+`register()` never called:
+
+```
+legacy plist:      PRESENT — /Users/…/Library/LaunchAgents/com.micpeg.agent.plist
+  its program:     /Users/…/.local/bin/micpeg
+launchd job:       present — gui/501/com.micpeg.agent
+  pid:             63973
+  running from:    /Users/…/.local/bin/micpeg
+  managed_by:      (absent — not an SMAppService job)
+SMAppService:      enabled
+verdict:           LEGACY PRESENT
+```
+
+`SMAppService: enabled` for an app that has never registered anything. This is stage 2's
+finding in the shape a real user would hit it. The two fields that catch it are `managed_by`,
+absent for a hand-written job, and the executable path behind the pid.
+
+#### 10. The migration, end to end
+
+```
+--- tearing down the legacy LaunchAgent ---
+launchctl bootout gui/501/com.micpeg.agent → status 0
+removed /Users/…/Library/LaunchAgents/com.micpeg.agent.plist
+after teardown: legacy plist gone, launchd job gone, SMAppService enabled
+--- registering this bundle ---
+register(): returned without throwing
+status after register(): enabled
+confirmed after 0s: pid 64277 (was 63973) running from /Applications/Micpeg.app/Contents/MacOS/micpeg,
+                    state.json written at 2026-09-10 22:55:16
+verdict:           HEALTHY
+```
+
+Note `after teardown: … SMAppService enabled` — with the plist deleted and the job gone,
+`status` still said `enabled`. It is never load-bearing here.
+
+The log shows the handoff, including the legacy daemon's last run and the bundled one opening
+its own log because launchd handed it `/dev/null`:
+
+```
+22:54:53.325 micpeg starting (pid 63973)          ← legacy, StandardErrorPath
+22:54:53.477 ABSENT -> PINNED: startup
+22:55:16.157 stderr was /dev/null — logging to /Users/…/Library/Logs/micpeg.log
+22:55:16.166 micpeg starting (pid 64277)          ← bundled
+22:55:16.326 ABSENT -> PINNED: startup
+```
+
+`config.json` was byte-identical before and after (`diff`, no output). The pinned Elgato Wave
+survived the upgrade, which is the whole point.
+
+**And the daemon that came out of it is not merely running.** A scratch tool changed the
+default input, the way any application can:
+
+```
+22:56:08.118 PINNED -> YIELDED: user chose MacBook Pro Microphone [bltn] — respecting
+22:56:17.270 REVERT -> Elgato Wave:1 (SIGHUP, displacing MacBook Pro Microphone [bltn])
+22:56:17.271 ABSENT -> PINNED: SIGHUP, displacing MacBook Pro Microphone [bltn]
+```
+
+#### 11. `proc_pidpath` alone reports HEALTHY for a broken registration
+
+The app cannot ask ServiceManagement where the registration points. `launchctl print` gives
+`program identifier = Contents/MacOS/micpeg` — bundle-relative — plus `parent bundle
+identifier`; `SMAppService` has no path property at all; and `sfltool dumpbtm`, which does hold
+the absolute URL, demands an administrator password, which rules it out of a shipping app.
+
+`proc_pidpath()` on the running daemon's pid is the closest available substitute. It works
+across processes of the same user with no privilege and no entitlement, and `ps -o comm=` is
+not a substitute for it — that prints `micpeg`, with no path.
+
+It is still not enough. After `mv /Applications/Micpeg.app ~/Applications/Micpeg.app`, run
+from the new location:
+
+```
+  pid:             64277
+  running from:    /Users/…/Applications/Micpeg.app/Contents/MacOS/micpeg
+  verdict:         HEALTHY
+```
+
+Wrong. The `mv` carried the inode, so the process that was already running reports the *new*
+path, and the check passed on a registration that was about to fail. Only the next spawn would
+have shown it.
+
+So the app records its own bundle path at the moment it registers, in `UserDefaults` under
+`com.micpeg.app`. It is one-way evidence — its absence proves nothing, so it can only take a
+healthy verdict away, never grant one. The same move now reads:
+
+```
+registered from:   /Applications/Micpeg.app   — NOT where this app is now
+verdict:           MOVED — this app registered from /Applications/Micpeg.app and is now at
+                   /Users/…/Applications/Micpeg.app; re-register from here
+```
+
+`repair()` then fixed it in both directions, each time confirmed by a new pid running from the
+current bundle and a `state.json` written after the call.
+
+#### 12. A move sometimes survives, and the app cannot tell which case it is in
+
+Stage 2 recorded "registration does not follow a shell `mv`". Stage 3 observed it following
+one. Both are real:
+
+| Move | Result after killing the daemon |
+|---|---|
+| `/Applications` → `~/Applications` | respawned in 1 s from `~/Applications` |
+| `~/Applications` → `/Applications` | `last exit code = 78: EX_CONFIG`, `job state = spawn failed` |
+
+Once broken, it stays broken: **70 seconds of `spawn failed` with the bundle sitting at the
+right path and the app having been executed from there.** launchd does not go looking.
+
+Why one direction survived was not chased down, and the answer would not change the code. What
+matters is that the app cannot distinguish the two from the outside, which is exactly why the
+recorded path exists and why `repair()` is unconditional. `repair()` recovers the broken state:
+
+```
+before:  pid = none, last exit code = 78: EX_CONFIG, verdict STALE
+after:   pid 68820 running from /Applications/Micpeg.app/Contents/MacOS/micpeg, verdict HEALTHY
+```
+
+#### 13. The CLI symlink, and the bundle guard through it
+
+`~/.local/bin/micpeg` was a real copy of the old binary — the legacy install. `MicpegApp link`
+runs the bundled CLI's own `link --force`:
+
+```
+/Applications/Micpeg.app/Contents/MacOS/micpeg link --force → status 0
+  linked /Users/…/.local/bin/micpeg -> /Applications/Micpeg.app/Contents/MacOS/micpeg
+CLI on PATH is now: symlink -> /Applications/Micpeg.app/Contents/MacOS/micpeg
+```
+
+The migration only ever *offers* this. It is the user's file, and replacing a binary they
+installed themselves, unasked, is how an upgrade silently breaks a working setup.
+
+With the symlink in place, the guard added in stage 1 was testable for the first time through
+the path it was written for, and it holds:
+
+```
+$ micpeg install
+error: this copy of micpeg lives inside Micpeg.app, which registers the
+       background agent itself. …
+$ echo $?
+1
+```
+
+Both `install` and `uninstall` are refused, and `~/Library/LaunchAgents` stayed empty.
+
+#### What stage 3 did not do
+
+`repair()` is not run automatically when the app launches. The app surveys on launch and shows
+the verdict, and repairing is a button. Doing launchd surgery as a side effect of opening a
+window, with no interface yet to say what happened, is a stage 4 decision and should be made
+there deliberately rather than inherited from a test harness.

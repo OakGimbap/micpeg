@@ -100,7 +100,8 @@ Targets marked `(planned)` do not exist yet — see the build order at the end o
 Sources/MicpegAudio/       # read-only CoreAudio helpers, shared. No writes.
 Sources/micpeg/main.swift  # daemon + CLI. Owns the only setDefaultInputDevice call.
 Sources/MicpegUI/          # (planned) SwiftUI views (library target, so previews work)
-Sources/MicpegApp/         # @main, wiring, migration. Thin. Stage 2 is a test harness.
+Sources/MicpegApp/         # @main, survey, migration, registration record. Thin.
+                           #   stages 2-3 are a test harness, replaced at stage 4
 bundle/                    # Info.plist, agent plist, entitlements — inputs to bundle.sh
 scripts/install.sh         # source build + install, for developers
 scripts/invariants.sh      # the structural greps above; CI runs it
@@ -128,14 +129,24 @@ micpeg status
 tail -f ~/Library/Logs/micpeg.log
 launchctl print gui/$(id -u)/com.micpeg.agent       # what launchd actually resolved
 launchctl kill SIGHUP gui/$(id -u)/com.micpeg.agent # reload config
-/Applications/Micpeg.app/Contents/MacOS/MicpegApp status   # what SMAppService thinks
+/Applications/Micpeg.app/Contents/MacOS/MicpegApp status    # what SMAppService thinks
+/Applications/Micpeg.app/Contents/MacOS/MicpegApp survey    # what is actually installed
+/Applications/Micpeg.app/Contents/MacOS/MicpegApp migrate   # tear down the legacy agent, register
+/Applications/Micpeg.app/Contents/MacOS/MicpegApp repair    # unregister + register, confirmed
+/Applications/Micpeg.app/Contents/MacOS/MicpegApp link      # put micpeg on PATH, into the bundle
 ```
 
-Those two are the diagnostic pair, and they disagree in useful ways: `launchctl print` has
-shown a job still `running` after ServiceManagement had dropped every record of it, and only
-`MicpegApp status` reported the truth (`notFound`).
+**`survey` is the one to reach for.** `status` and `launchctl print` each answer a narrower
+question and both have been caught lying: `launchctl print` has shown a job still `running`
+after ServiceManagement had dropped every record of it, and `SMAppService.status` has reported
+`.enabled` for an app that had never registered anything — it is keyed on the label, so it
+answers for whichever agent holds it, including a hand-written one. `survey` reads the plist on
+disk, the launchd job, the pid's real executable path via `proc_pidpath`, the app's own record
+of where it registered from, and `state.json`, and says which of those disagree. It changes
+nothing.
 
-**Do not reach for `sfltool dumpbtm` casually.** It requests `system.privilege.admin` and the
+**Do not reach for `sfltool dumpbtm` casually** — `scripts/invariants.sh` now fails if the
+name appears on a code line anywhere in `Sources/`. It requests `system.privilege.admin` and the
 credential is not cached, so every single invocation raises a password dialog — 26 of them in
 one session while stage 2 was being worked out. Use it only when the Background Task Management
 record's own contents are the question. Nothing micpeg ships ever asks for an administrator
@@ -155,6 +166,15 @@ The first of those is no longer hypothetical. With a legacy agent holding the la
 `register()` returns without throwing and records **nothing**, and `status` returns `.enabled`
 about the legacy agent. **Never treat `SMAppService.status` as evidence that the agent is
 running.** The check that means something is `state.json`'s `updated` timestamp moving.
+
+Stage 3 added a second one, and it is subtler because the evidence looks good. **A running
+daemon whose executable is inside this bundle does not mean the registration is intact.** A
+shell `mv` carries the bundle's inode, so the process that was already running reports the
+*new* path while launchd still fails to spawn the next one (`EX_CONFIG`), and nothing repairs
+it — measured at 70 s and counting. Only the path the app recorded for itself when it
+registered catches that, which is why `RegistrationRecord` exists. Confirming a registration
+takes three things together: a pid, that pid's executable inside this bundle, and a
+`state.json` written *after* the call.
 
 `docs/app-design.md` ends with a list of assumptions that are documented but **not yet observed
 on hardware**. Confirm them before building on them, and record results in
