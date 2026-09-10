@@ -119,6 +119,7 @@ Sources/MicpegAudio/   # read-only CoreAudio helpers. No writes. Shared.
 Sources/micpeg/        # daemon + CLI. Owns the only setDefaultInputDevice call.
 Sources/MicpegUI/      # SwiftUI views. Library target so Xcode previews work.
 Sources/MicpegApp/     # executable: @main, wiring, migration. Thin.
+bundle/                # Info.plist, the agent plist and the entitlements, for bundle.sh
 ```
 
 `MicpegAudio` is an extraction of the existing helper block in `main.swift` (`addr`, `fourCC`,
@@ -156,16 +157,26 @@ moves, including for the source-build path in `scripts/install.sh`. Fix it in st
 ```
 Micpeg.app/Contents/
   Info.plist
-  MacOS/Micpeg                                 # SwiftUI app, universal
+  MacOS/MicpegApp                              # SwiftUI app, universal
   MacOS/micpeg                                 # daemon + CLI, universal
   Library/LaunchAgents/com.micpeg.agent.plist  # where SMAppService looks
   Resources/AppIcon.icns
 ```
 
-**This layout does not survive a case-insensitive filesystem, which is the macOS default.**
-`MacOS/Micpeg` and `MacOS/micpeg` resolve to a single file on APFS as shipped — measured, see
-[`verification.md`](verification.md) — so the second copy silently overwrites the first. The
-names have to change before stage 2 assembles anything.
+The app executable is `MicpegApp`, not `Micpeg`, because `MacOS/Micpeg` and `MacOS/micpeg`
+are a single file on a case-insensitive filesystem — the macOS default — and the second copy
+silently replaces the first (measured, see [`verification.md`](verification.md)). Every
+shipping app that carries a CLI beside its GUI solves this the same way, by giving the two
+files names that differ by more than case: IINA ships `IINA` and `iina-cli`, Spotify ships
+`Spotify` and `spotify_cli`.
+
+Which of the two gets renamed is not arbitrary. The daemon is a background process, so its
+executable name is what `ps`, Activity Monitor and `launchctl print` show a person who is
+trying to work out what is running; the app is a GUI process, whose displayed name comes from
+`CFBundleName`. Renaming the app side costs a string nobody sees. It also happens to match
+what SwiftPM already builds, so `scripts/bundle.sh` copies both files under the names it was
+given and has no rename step that could collide. The script asserts afterwards that
+`Contents/MacOS` holds two distinct files.
 
 `Info.plist` keys that matter:
 
@@ -180,7 +191,19 @@ The agent plist uses `BundleProgram` — a bundle-relative path — not an absol
 absolute path breaks when the app is moved or replaced by an update, which is exactly the
 failure the old hand-written plist in `~/Library/LaunchAgents` had. Everything else carries
 over unchanged from `cmdInstall()`: `RunAtLoad`, `KeepAlive`, `ThrottleInterval 60`,
-`ProcessType Background`, `StandardErrorPath` pointing at `~/Library/Logs/micpeg.log`.
+`ProcessType Background`.
+
+**`StandardErrorPath` cannot come with it.** launchd does not expand `~`, and a plist built
+before the user exists cannot contain an absolute home path; a tilde there does not degrade to
+"no redirect", it refuses the job outright with `EX_CONFIG`. With the key omitted the daemon
+runs and writes its entire log to `/dev/null` — measured, see [`verification.md`](verification.md).
+
+The daemon therefore opens the log itself. `redirectStderrToLogIfDiscarded()` points fd 2 at
+`~/Library/Logs/micpeg.log` when, and only when, fd 2 is `/dev/null` — which is exactly what
+launchd hands a job with no redirect, and is not what a shell, a pipe or a user's own
+`2>somewhere` looks like. It is the only change stage 2 made to the daemon, and it is the
+reason `tail -f ~/Library/Logs/micpeg.log` still works and the "recent activity" panel below
+has something to read.
 
 ### The label stays `com.micpeg.agent`
 
@@ -189,21 +212,57 @@ Reusing the legacy label looks like it invites a collision with installations th
 
 A *new* label would let the legacy agent and the bundled agent run **at the same time**. Two
 daemons enforcing the same pin would each see the other's write as a change to judge, and three
-reverts inside five seconds is precisely the `BACKOFF` trigger. With one shared label, launchd
-refuses the second bootstrap and the conflict is loud instead of silent.
+reverts inside five seconds is precisely the `BACKOFF` trigger. One shared label prevents that,
+and that reason stands.
+
+**The rest of the original argument does not.** It claimed launchd would refuse the second
+registration and make the conflict loud. Measured, it does the opposite: with the legacy agent
+running, `register()` returns without throwing, changes nothing, and `status` reports `.enabled`
+— about the legacy agent, because Background Task Management keys its record on the label and
+not on the bundle. See [`verification.md`](verification.md). Two consequences:
+
+- **Migration is mandatory, not a nicety.** The app must find the legacy plist on disk and tear
+  it down *before* registering. `SMAppService.statusForLegacyPlist(at:)` takes a
+  `~/Library/LaunchAgents` URL and exists for this.
+- **`SMAppService.status` is not a liveness check.** The only honest confirmation that the
+  agent registered here is running is `state.json` — the timestamp has to move. That is a check
+  the app needs anyway.
 
 ## Registration
 
 `SMAppService.agent(plistName:)` replaces the hand-written plist and `launchctl bootstrap`. It
-requires a valid code signature, which the project has, and in exchange it handles the parts
-the manual path got wrong: the registration follows the bundle when it moves, and it is torn
-down when the app is deleted rather than leaving an orphaned agent behind.
+requires a valid code signature, which the project has. `BundleProgram` resolves as documented
+and the agent runs from inside the bundle — that much is confirmed on hardware.
+
+The two things it was adopted *for* are not confirmed, and one of them is contradicted:
+
+| Claimed | Measured |
+|---|---|
+| The registration follows the bundle when it moves | It does not. A shell `mv` leaves the registration pinned to the old path (`EX_CONFIG`, `spawn failed`); a **Finder** move deletes both Background Task Management records outright, and moving the bundle back restores nothing |
+| Deleting the app tears the agent down | Partly. The records do go, but the running daemon keeps going on its inode and the launchd job is left behind unspawnable |
+
+Neither changes the decision — the manual path was worse on both counts, and nothing here is a
+reason to go back to writing a plist into `~/Library/LaunchAgents`. But it changes what the app
+must do:
+
+- **The app has to re-register itself when it notices it has moved.** Every launch should
+  compare its own bundle path against what the registration resolves to, and repair the
+  difference. Nothing else will, and the symptom is a microphone that quietly stops being
+  pinned.
+- **Repair means `unregister()` then `register()`, verified through `launchctl`.** A bare
+  `register()` over a purged record creates a new BTM entry while leaving the old launchd job
+  in place, and the next spawn fails with `EX_CONFIG` — measured. `unregister()` also does
+  nothing at all when `status` is `.notFound`, so its return value proves nothing either.
+- Stage 5's uninstall instructions cannot be "drag it to the Trash" alone.
 
 Two states need real handling, not just a success path:
 
-- **`.requiresApproval`** — the user disabled the item in Login Items. `register()` can return
-  without an error while the agent does not run. The app must detect this and deep-link to
-  System Settings rather than claiming success.
+- **`.requiresApproval`** — the user disabled the item in Login Items. Measured: the launchd job
+  is removed entirely, the daemon stops, and **code cannot undo it**. `register()` throws
+  `SMAppServiceErrorDomain` code 1, "Operation not permitted", and an `unregister()` first does
+  not help — the status snaps straight back. The app's only correct response is to say what
+  happened and offer `SMAppService.openSystemSettingsLoginItems()`. Neither the domain nor the
+  code belongs on screen; code 1 is not even in `SMErrors.h`.
 - **`.notRegistered` after a successful install** — treat as a failure to surface, not to retry
   silently.
 
@@ -324,16 +383,20 @@ This project's rule is that documentation is not evidence. Everything below is d
 Apple's documentation or from reasoning, and **none of it has been observed on real hardware.**
 Confirm each before building on it, and record results in [`verification.md`](verification.md).
 
-| Assumption | How to check |
-|---|---|
-| `BundleProgram` resolves correctly for an `SMAppService`-registered agent | `launchctl print gui/$UID/com.micpeg.agent` and read the resolved program path |
-| Registration survives moving the app and replacing it with an update | Move to a different directory, reboot, re-check |
-| `.requiresApproval` is reachable and recoverable | Disable in Login Items, relaunch, observe the status the app reads |
-| Deleting the app tears the agent down | Trash the app, then `launchctl print` |
-| `com.apple.security.device.audio-input` is required under hardened runtime | Build a notarized copy without it and see whether the prompt appears |
-| `AVAudioEngine` recovers from a device change mid-test | Start a test, connect a headset, watch the meter |
-| Pinning input keeps AirPods in A2DP (the README claim) | Play audio, connect, compare before/after |
-| SwiftUI previews work against a SwiftPM library target in the current Xcode | Open `Package.swift`, add a preview, run it |
+| Assumption | How to check | Status |
+|---|---|---|
+| `BundleProgram` resolves correctly for an `SMAppService`-registered agent | `launchctl print gui/$UID/com.micpeg.agent` and read the resolved program path | **confirmed** (stage 2) |
+| Replacing the app in place keeps the registration working | `ditto` a new build over it, restart the agent | **confirmed** (stage 2) |
+| Registration survives moving the app | Move to a different directory, restart the agent | **false for a shell `mv`** (stage 2). A Finder move is still open |
+| Deleting the app tears the agent down | Trash the app, then `launchctl print` | **false** (stage 2). Whether emptying the Trash or a login clears it is open |
+| A legacy agent under the same label makes the conflict loud | Bootstrap the old plist, then `register()` | **false** (stage 2) — it is silent, and `status` lies |
+| `.requiresApproval` is reachable | Disable in Login Items, relaunch, observe the status the app reads | **confirmed** (stage 2) — and **not** recoverable in code |
+| The bundled agent can keep a log | Read `fd 2` of the running daemon | **fixed** (stage 2) — the daemon opens the file itself |
+| Anything micpeg ships needs an administrator password | Read every `authd` authorization in a session | **never** (stage 2) — agent registration is per-user |
+| `com.apple.security.device.audio-input` is required under hardened runtime | Build a notarized copy without it and see whether the prompt appears | open — the entitlement is attached and verified, its *necessity* is not |
+| `AVAudioEngine` recovers from a device change mid-test | Start a test, connect a headset, watch the meter | open |
+| Pinning input keeps AirPods in A2DP (the README claim) | Play audio, connect, compare before/after | open |
+| SwiftUI previews work against a SwiftPM library target in the current Xcode | Open `Package.swift`, add a preview, run it | open |
 
 ## Build order
 

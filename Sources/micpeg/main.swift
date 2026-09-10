@@ -31,6 +31,38 @@ func log(_ message: String) {
     fputs("\(stampFormatter.string(from: Date())) \(message)\n", stderr)
 }
 
+// The daemon writes its log to stderr and nowhere else, so the file at ~/Library/Logs
+// exists only because something redirects fd 2 there. The hand-written LaunchAgent did it
+// with StandardErrorPath. The agent plist that ships inside Micpeg.app cannot: launchd does
+// not expand `~`, and a plist built before the user exists cannot spell out their home
+// directory — and a tilde there is not merely ignored, it makes launchd refuse the whole job
+// with EX_CONFIG. So an SMAppService-registered agent starts with fd 2 on /dev/null and
+// every line above is discarded; 324 bytes of startup log went missing that way before it
+// was noticed. See docs/verification.md.
+//
+// Redirect only in that exact case. `micpeg daemon` run by hand in a shell has to keep
+// printing to that shell — that is how the CoreAudio traps in design.md were found — and a
+// `2>somewhere` the user typed must be left alone. So the test is not isatty(), which would
+// also catch a pipe and a redirect to a file: it is "is fd 2 literally /dev/null", which is
+// what launchd hands a job whose plist names no StandardErrorPath.
+func redirectStderrToLogIfDiscarded() {
+    var current = stat()
+    var devNull = stat()
+    guard fstat(2, &current) == 0,
+          (current.st_mode & mode_t(S_IFMT)) == mode_t(S_IFCHR),
+          stat("/dev/null", &devNull) == 0,
+          current.st_rdev == devNull.st_rdev else { return }
+
+    try? FileManager.default.createDirectory(at: logPath.deletingLastPathComponent(),
+                                             withIntermediateDirectories: true)
+    // O_APPEND so this descriptor keeps writing at the end even after
+    // truncateLogIfLarge() has cut the file out from under it.
+    let fd = open(logPath.path, O_WRONLY | O_CREAT | O_APPEND, 0o644)
+    guard fd >= 0 else { return }
+    if fd != 2 { dup2(fd, 2); close(fd) }
+    log("stderr was /dev/null — logging to \(logPath.path)")
+}
+
 // MARK: - CoreAudio
 
 // The read-only helpers (addr, allDevices, deviceUID, hasInput, transportType, …) live
@@ -1163,6 +1195,7 @@ func cmdUninstall() {
 }
 
 func cmdDaemon() {
+    redirectStderrToLogIfDiscarded()
     setvbuf(stderr, nil, _IOLBF, 0)
 
     let daemon = Daemon()

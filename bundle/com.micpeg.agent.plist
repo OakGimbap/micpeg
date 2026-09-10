@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- The same label the hand-written plist used. Not an oversight: a second label would
+         let a legacy agent and the bundled one run at once and fight into BACKOFF, whereas
+         one shared label makes launchd refuse the second bootstrap out loud.
+         docs/app-design.md, "The label stays com.micpeg.agent". -->
+    <key>Label</key>              <string>com.micpeg.agent</string>
+
+    <!-- BundleProgram, not Program: a path relative to the app bundle, so the registration
+         survives the user relocating the app. SMAppService.h:
+         "plists registered with SMAppService may use the BundleProgram launchd plist key to
+          specify an app bundle relative path for the executable. This key allows apps to
+          support a user relocating the app bundle after installation." -->
+    <key>BundleProgram</key>      <string>Contents/MacOS/micpeg</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>micpeg</string>
+        <string>daemon</string>
+    </array>
+
+    <!-- Carried over unchanged from cmdInstall(). ProcessType Background so the system does
+         not apply arbitrary light resource limits; KeepAlive with ThrottleInterval 60 so a
+         crash loop cannot become a battery drain. -->
+    <key>RunAtLoad</key>          <true/>
+    <key>KeepAlive</key>          <true/>
+    <key>ThrottleInterval</key>   <integer>60</integer>
+    <key>ProcessType</key>        <string>Background</string>
+
+    <!-- StandardErrorPath is absent, and its absence is a measured constraint rather than an
+         omission: launchd does not expand `~`, and a plist that ships inside the bundle
+         cannot know the user's home directory. A tilde here does not merely fail to
+         redirect — the job refuses to start at all (exit 78, EX_CONFIG). See
+         docs/verification.md. Where the daemon's log comes from instead is settled in the
+         entry for this stage. -->
+</dict>
+</plist>

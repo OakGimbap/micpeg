@@ -52,6 +52,35 @@ absent "the daemon cannot open an audio stream" \
        "AVFoundation" \
        Sources/micpeg Sources/MicpegAudio
 
+# The bundle templates carry two mistakes that assemble and sign without complaint.
+#
+# A `~` in a launchd path is not ignored: launchd keeps it literally, cannot open it, and
+# refuses the whole job with EX_CONFIG. Measured, docs/verification.md.
+if [ -f bundle/com.micpeg.agent.plist ]; then
+    if grep -n '<string>~' bundle/com.micpeg.agent.plist; then
+        echo "FAIL: a launchd path in bundle/com.micpeg.agent.plist starts with ~; launchd"
+        echo "      does not expand it and refuses the job (EX_CONFIG)"
+        fail=1
+    else
+        echo "ok:   no tilde paths in bundle/com.micpeg.agent.plist"
+    fi
+fi
+
+# APFS is case-insensitive by default, so Contents/MacOS cannot hold two executables whose
+# names differ only by case. scripts/bundle.sh checks the assembled tree; this checks the
+# names before anything is built.
+if [ -f bundle/Info.plist ]; then
+    exe=$(plutil -extract CFBundleExecutable raw -o - bundle/Info.plist 2>/dev/null || echo "")
+    lower_exe=$(printf '%s' "$exe" | tr '[:upper:]' '[:lower:]')
+    if [ "$lower_exe" = "micpeg" ]; then
+        echo "FAIL: CFBundleExecutable is '$exe', which collides with the daemon's 'micpeg'"
+        echo "      on a case-insensitive filesystem"
+        fail=1
+    else
+        echo "ok:   CFBundleExecutable '$exe' does not collide with 'micpeg'"
+    fi
+fi
+
 # One call to setDefaultInputDevice is the whole argument that input-only is structural
 # rather than a habit. Count it.
 writes=$(grep -rc AudioObjectSetPropertyData Sources | awk -F: '{n+=$2} END {print n+0}')

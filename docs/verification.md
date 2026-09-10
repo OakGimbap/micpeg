@@ -260,3 +260,312 @@ to stage 2.
 `NSHomeDirectory()` resolves through `getpwuid`, so `~/.config/micpeg` and `~/.local/bin` always
 mean the real ones. Any future test that writes there has to back up and restore instead.
 
+### Stage 2 — the bundle, `SMAppService`, and the agent plist
+
+Built with `scripts/bundle.sh`, signed with an Apple Development certificate (agents need a
+signature; only LaunchDaemons need notarization — `SMAppService.h`), copied to
+`/Applications`, and exercised from there rather than from a build directory.
+
+| Check | Result |
+|---|---|
+| Both executables are universal, `minos 14.0` | PASS — `x86_64 arm64` for `MicpegApp` and `micpeg` |
+| `Contents/MacOS` holds two distinct files | PASS — the collision guard in `bundle.sh` |
+| `codesign --verify --strict` | PASS — "valid on disk", "satisfies its Designated Requirement" |
+| The app carries `com.apple.security.device.audio-input` | PASS |
+| The daemon carries **no** entitlements | PASS — `codesign -d --entitlements -` returns nothing |
+| `spctl --assess` | rejected, as expected for a development certificate. Stage 5 concern |
+| `BundleProgram` resolves | PASS — see below |
+| The agent runs from inside the bundle and pins | PASS — `PINNED`, `state.json` written, pid from `Contents/MacOS/micpeg` |
+| Registration survives replacing the app in place | PASS — see below |
+| Registration survives moving the app | **FAIL** — a Finder move deletes the BTM records outright |
+| Deleting the app tears the agent down | partly — the records go, the launchd job and the running daemon stay |
+| A legacy agent under the same label makes the conflict loud | **FAIL** — it is completely silent |
+| The daemon still logs | fixed during this stage — see below |
+| `.requiresApproval` is reachable | **yes**, and it is **not** recoverable in code — see below |
+| The app or the daemon ever needs an administrator password | **never** — see below |
+
+`BundleProgram` itself works exactly as documented. With the app at `/Applications`,
+`launchctl print gui/$UID/com.micpeg.agent` reports:
+
+```
+path = (submitted by smd.35003)
+type = Submitted
+managed_by = com.apple.xpc.ServiceManagement
+program identifier = Contents/MacOS/micpeg (mode: 2)
+parent bundle identifier = com.micpeg.app
+arguments = { micpeg, daemon }
+```
+
+`ProgramArguments[0]` is not used as a path — `micpeg`, `anything` and a path naming a file
+that does not exist all produced a running daemon. It is argv[0] and nothing more.
+
+**`EX_CONFIG` (exit 78) is launchd's answer whenever it cannot realise the job**, and it came
+up in three unrelated ways during this stage: a `StandardErrorPath` it could not open, a
+bundle-relative program whose bundle had moved, and one whose bundle had been deleted. It
+is worth recognising on sight; nothing else in this project produces it.
+
+Replacing the app in place is fine. `ditto build/Micpeg.app /Applications/Micpeg.app` over a
+registered, running agent, followed by a restart, brought the daemon back from the new copy
+with no `register()` call — `PINNED`, fresh `state.json`. `SMAppService.h` recommends
+re-registering after an update anyway, and stage 3 will, but the failure it warns about did
+not occur here.
+
+Note for any future test: `ThrottleInterval 60` means `launchctl print` reports `minimum
+runtime = 60`, and a daemon killed before it has run a minute will sit at `spawn scheduled`
+for the remainder. Two tests in this stage first looked like failures for that reason.
+
+#### 1. The shared label does not make the conflict loud. It makes it silent.
+
+`app-design.md` argued that reusing `com.micpeg.agent` is safe because "launchd refuses the
+second bootstrap and the conflict is loud instead of silent". Measured, with the legacy
+hand-written agent bootstrapped and running:
+
+```
+status before: enabled          ← nothing had ever been registered from the bundle
+register(): returned without throwing
+status after:  enabled
+launchd:  path = /Users/…/Library/LaunchAgents/com.micpeg.agent.plist
+          program = /Users/…/.local/bin/micpeg
+          pid = 21738           ← unchanged; the legacy daemon, from the legacy path
+btm:      Generation: 12        ← unchanged; the registration recorded nothing
+```
+
+No error, no exception, no change. Worse than silent: `status` reports `.enabled` **about the
+legacy agent**, because Background Task Management keys its record on the label
+(`8.com.micpeg.agent`), not on the bundle. An app that trusts `register()` and `status` would
+tell the user the agent is running while what is running is the old binary at the old path —
+and would keep saying so after an uninstall of the app.
+
+The conclusion is not that the shared label is wrong; it still prevents two daemons fighting.
+It is that **the conflict has to be detected by the app, on disk, before registering.**
+`SMAppService.statusForLegacyPlist(at:)` exists for exactly this and takes a
+`~/Library/LaunchAgents` URL. Migration is therefore not a convenience — it is the only thing
+standing between an upgrading user and an app that lies to them.
+
+It also means **`SMAppService.status` is not a liveness check.** The honest check is the one
+the app already has a reason to do: watch `state.json` and confirm its `updated` timestamp
+moves after registration. That is an end-to-end proof that the agent ran; the registry lookup
+is not.
+
+#### 2. Moving the bundle destroys the registration, and moving it back does not restore it
+
+`SMAppService.h` says `BundleProgram` "allows apps to support a user relocating the app bundle
+after installation". It does not, in either kind of move.
+
+**Shell `mv`.** The registration survives but is pinned to the path it was made at:
+
+```
+mv /Applications/Micpeg.app ~/Applications/Micpeg.app
+pkill -x micpeg
+→ 120 s later:  state = spawn scheduled,  last exit code = 78: EX_CONFIG,  job state = spawn failed
+```
+
+Moving the bundle back and restarting recovered it with no `register()` call.
+
+**Finder move** — the one a user actually performs — is worse. Dragging
+`/Applications/Micpeg.app` to `~/Downloads` in Finder **deleted both Background Task
+Management records**:
+
+```
+sfltool dumpbtm | grep -ci micpeg      → 0        (97 records for other apps, so the tool is fine)
+SMAppService.status                    → notFound
+```
+
+Nothing then appears in System Settings → Login Items & Extensions, which is how this was
+found: there was no Micpeg row to switch off. Moving the bundle back to `/Applications` and
+waiting restored **nothing** — still 0 records, still `.notFound`.
+
+**And the launchd job outlives the records.** After the purge, `launchctl print` still showed
+the job `running` on its old process, carrying a `BTM uuid` that no longer existed anywhere.
+A plain `register()` from that state created a fresh BTM record but left the broken job in
+place, so the next spawn failed with `EX_CONFIG` and the machine had no daemon at all. The
+sequence that actually repairs it:
+
+```
+unregister()      → the launchd job disappears (verify: launchctl print returns nothing)
+register()        → new job, BTM uuid matching the new record, daemon running
+```
+
+The first `unregister()` attempt, made while `status` was `.notFound`, did nothing — there was
+no record for it to act on. It only worked after a `register()` had recreated one. **Any
+recovery path has to check `launchctl print`, not the return value of `unregister()`.**
+
+#### 3. Deleting the app: the teardown is real, but it is not immediate
+
+The Trash test earlier in this stage looked like the record survived deletion:
+
+```
+Finder → move /Applications/Micpeg.app to the Trash
+  daemon still running after 30 s          (it holds its own inode)
+  pkill -x micpeg
+  → state = spawn scheduled, last exit code = 78: EX_CONFIG
+  → BTM record still present, still enabled, Generation unchanged
+```
+
+The Finder-move result above supersedes that reading. Background Task Management **does** drop
+its records once the bundle is no longer at the path it registered from — the 30-second
+observation was simply too early. What remains true, and matters:
+
+- The running daemon is not killed. It keeps going on its own inode until something stops it.
+- The **launchd job is not removed with the records**, so a stale, unspawnable job is left
+  behind. That orphan is what `app-design.md` credited `SMAppService` with preventing.
+
+#### A note on what BTM records
+
+`Executable Path` in the BTM entry is exactly the plist's `BundleProgram`, verbatim
+(`Contents/MacOS/micpeg`). An earlier dump in this session read `MacOS/micpeg`; that was left
+over from a deliberately wrong variant used while narrowing down the spawn failure, not a
+normalisation the system performs.
+
+#### 4. The bundled agent has no log at all
+
+The daemon writes its log with `fputs(…, stderr)` and nothing else (`main.swift:31`). The file
+at `~/Library/Logs/micpeg.log` exists only because the hand-written LaunchAgent sets
+`StandardErrorPath`. A plist that ships inside the bundle cannot do that, because it is built
+before the user exists:
+
+| `StandardErrorPath` | Result |
+|---|---|
+| `~/Library/Logs/micpeg-tildeprobe.log` | `stderr path = ~/Library/…` kept literally; **exit 78 `EX_CONFIG`, the job never runs** |
+| `/Users/<user>/Library/Logs/micpeg-tildeprobe.log` | exit 0, the file is written |
+
+launchd does not expand `~`, and it does not fail softly about it — the whole job is refused.
+With the key omitted, the agent runs and its diagnostics go nowhere:
+
+```
+$ lsof -p <daemon> -a -d 0,1,2
+micpeg  …  0r  CHR  3,2  /dev/null
+micpeg  …  1u  CHR  3,2  /dev/null
+micpeg  …  2u  CHR  3,2  0t324  /dev/null     ← 324 bytes of startup log, discarded
+```
+
+`~/Library/Logs/micpeg.log` keeps the timestamp of the last legacy run. The project's rule is
+that a quiet log proves nothing; here there is no log to be quiet. The stage 4 "recent
+activity" panel would have nothing to read, and `tail -f ~/Library/Logs/micpeg.log` — which
+`CLAUDE.md` and the README both tell people to run — would show a file frozen at the moment
+they installed the app.
+
+**Resolved by making the daemon open its own log.** `redirectStderrToLogIfDiscarded()` runs at
+the top of `cmdDaemon()` and re-points fd 2 at `~/Library/Logs/micpeg.log` — but only when fd 2
+is *literally* `/dev/null`, tested by comparing `fstat(2)`'s `st_rdev` against `stat("/dev/null")`
+rather than by `isatty()`. `isatty()` would have been wrong twice over: it also reports false
+for a pipe and for a file the user redirected to, and stealing either of those would break the
+debugging path that found the CoreAudio traps in the first place.
+
+Verified on all three inputs:
+
+| fd 2 at start | Log went to | `~/Library/Logs/micpeg.log` touched |
+|---|---|---|
+| a pty | the pty | no |
+| a file, from `micpeg daemon 2>somewhere` | that file | no |
+| `/dev/null` | `~/Library/Logs/micpeg.log` | **yes** |
+
+The redirected case announces itself in the file it just opened, which is the only place the
+notice could be read from:
+
+```
+22:13:03.580 stderr was /dev/null — logging to /Users/…/Library/Logs/micpeg.log
+22:13:03.638 listeners registered: dev# dIn  srst
+22:13:03.639 ABSENT -> PINNED: startup
+```
+
+The file is opened `O_APPEND` so that `truncateLogIfLarge()` cannot leave the descriptor
+writing past a hole. This is the only change made to the daemon during stage 2.
+
+#### 5. `.requiresApproval` is reachable, and code cannot get out of it
+
+Switching Micpeg off under System Settings → General → Login Items & Extensions → Allow in the
+Background:
+
+```
+SMAppService.status                              → requiresApproval
+launchctl print gui/$UID/com.micpeg.agent        → nothing; the job is gone
+micpeg status                                    → daemon: not loaded
+launchctl print-disabled gui/$UID                → "com.micpeg.agent" => enabled   ← misleading
+```
+
+Note the last line: launchd's own disabled list still says `enabled`, so it is not a usable
+check for this state either.
+
+`register()` from there throws, and an `unregister()` first does not help:
+
+```
+register()                    → SMAppServiceErrorDomain code=1, "Operation not permitted"
+unregister(); register()      → notRegistered, then the same throw, then requiresApproval again
+```
+
+So the user's decision is sticky and only reversible where they made it. The app's only correct
+response is to say so and offer `SMAppService.openSystemSettingsLoginItems()`. Note also that
+code 1 is **not** in `SMErrors.h`, whose enum starts at `kSMErrorInternalFailure = 2`, and the
+domain is `SMAppServiceErrorDomain`, which is macOS 15+. Do not present either to a user.
+
+#### 5b. Re-enabling the item in System Settings restores everything
+
+Switching Micpeg back on under Login Items:
+
+```
+SMAppService.status                → enabled
+launchctl print                    → state = running, program identifier = Contents/MacOS/micpeg (mode: 2)
+lsof -p <daemon> -a -d 2           → /Users/…/Library/Logs/micpeg.log      ← the daemon's own redirect
+```
+
+And the agent is not merely loaded — the listeners are alive under `SMAppService`, proved by
+provoking a real event rather than reading a quiet log. Moving the default input to the
+built-in microphone behind the daemon's back, then `micpeg on`:
+
+```
+22:18:05.317 ABSENT -> PINNED: startup
+22:18:38.572 PINNED -> YIELDED: user chose MacBook Pro Microphone [bltn] — respecting
+22:18:45.982 SIGHUP — reloading config
+22:18:45.998 REVERT -> Elgato Wave:1 (SIGHUP, displacing MacBook Pro Microphone [bltn])
+22:18:45.998 ABSENT -> PINNED: SIGHUP, displacing MacBook Pro Microphone [bltn]
+```
+
+`'dIn '` fires, the state machine judges, the CLI inside the bundle reaches the daemon over
+SIGHUP, and the revert lands — all of it recorded in a log file that only exists because the
+daemon opens it itself.
+
+#### 6. Nothing micpeg ships ever needs an administrator password
+
+Worth stating because this stage produced a great many password prompts, and none of them came
+from micpeg. Every authorization request in a two-hour window, by client:
+
+| Right | Client | Times |
+|---|---|---|
+| `system.privilege.admin` | `/usr/bin/sfltool` | 26 |
+| `system.privilege.admin` | `backgroundtaskmanagementd`, on sfltool's behalf | 26 |
+| `com.apple.ServiceManagement.daemons.modify` | `/usr/libexec/mdmclient` | 16, uid 0, no prompt |
+
+`micpeg`, `MicpegApp` and `smd` appear **zero** times. Registering a LaunchAgent through
+`SMAppService` is a per-user operation and needs no authorization at all; only LaunchDaemons
+would, which is one more reason this project registers an agent.
+
+The 26 prompts were all `sfltool dumpbtm`, run as a diagnostic while narrowing down the
+findings above. It requests `system.privilege.admin` **once per invocation** — the credential is
+not cached between runs, so 26 invocations produced 26 dialogs. It is not part of the product
+and must not be part of a routine workflow.
+
+Unprivileged substitutes cover everything it was used for:
+
+| Question | Unprivileged answer |
+|---|---|
+| Is the agent registered, and to what? | `launchctl print gui/$UID/com.micpeg.agent` — program identifier, pid, exit code, BTM uuid |
+| What does ServiceManagement think? | `MicpegApp status` — this is the one that reported `notFound` when `launchctl` still showed a stale job |
+| Is the daemon actually doing its job? | `micpeg status`, and the `updated` timestamp in `state.json` |
+
+Reach for `sfltool dumpbtm` only when the record's own contents are the question — its
+`Disposition`, `Generation`, or the path it recorded — and expect a password each time.
+
+#### One failure that could not be reproduced
+
+The first `register()` after removing the legacy install failed with `EX_CONFIG`, and so did
+the next attempt; a third `unregister()` + `register()` cycle succeeded, and the same shipping
+plist has worked on every attempt since. Re-creating the legacy install and repeating the
+sequence did **not** reproduce it — by then a ServiceManagement-owned BTM record existed,
+where the first time there was only a `Type: legacy agent` record left over from the
+hand-written plist. Forcing the machine back to that state means `sfltool resetbtm`, which
+wipes every background item for every app on the system, so it was not run.
+
+Treat it as: **the first registration after a legacy uninstall may fail, and an
+`unregister()` + `register()` cycle clears it.** Stage 3 should do that cycle unconditionally
+and verify through `state.json` rather than through the return value.
