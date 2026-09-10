@@ -527,7 +527,10 @@ default input:         Elgato Wave:1
 | 안정된 AirPods를 의도적 선택 (마지막 쓰기 후 4초) | `YIELDED` — 존중 ✅ |
 | 우리 쓰기 직후 AirPods가 재탈취 (grace 내) | `REVERT ... (flip-back to AirPods Pro 3)` ✅ |
 
-참고: AirPods 입력 객체 UID는 `AA-BB-CC-DD-EE-FF:input` (MAC 기반, 장치별 안정).
+참고: AirPods 입력 객체 UID는 `XX-XX-XX-XX-XX-XX:input` 형태다 (MAC 기반, 장치별 안정).
+자리표시자를 16진수가 아닌 `X`로 쓴다. `AA-BB-CC-DD-EE-FF`로 적었더니 CI의
+`No device identifiers committed` 검사가 이 문장을 실제 MAC으로 오인해 빌드 #1·#2를
+떨어뜨렸다 — A~F가 유효한 16진수라서다. 되돌리지 말 것.
 
 ### 판정 로직 설계 회고
 
