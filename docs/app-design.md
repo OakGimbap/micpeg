@@ -136,9 +136,20 @@ second place to get them wrong. `evaluate()` and everything around it do not mov
 The `MicpegUI` / `MicpegApp` split exists so SwiftUI previews have a library target to attach
 to — see [`app-ui.md`](app-ui.md). It produces one executable either way.
 
-SwiftPM's `platforms:` is package-wide, so the whole package moves to the app's deployment
-target. Since the single distributed artifact is the app bundle, and the CLI now ships inside
-it, nothing is lost.
+### Deployment target: macOS 14
+
+SwiftPM's `platforms:` is package-wide, so the whole package moves to the app's minimum
+version — the daemon cannot keep its own. Since the single distributed artifact is the app
+bundle and the CLI now ships inside it, that costs nothing at distribution time.
+
+macOS 14 rather than 13, which `SMAppService` alone would have allowed, because `@Observable`
+is 14-only. Without it the state model needs `ObservableObject` and per-property `@Published`
+throughout — more boilerplate in exactly the code that bridges CoreAudio callbacks, the file
+watcher and the log parser into the view, which is the part most likely to be got wrong.
+macOS 14 shipped in September 2023.
+
+**This makes `README.md`'s "macOS 12 (Monterey) or later" false** from the moment the package
+moves, including for the source-build path in `scripts/install.sh`. Fix it in stage 5.
 
 ## Bundle layout
 
@@ -156,7 +167,7 @@ Micpeg.app/Contents/
 | Key | Value | Why |
 |---|---|---|
 | `CFBundleIdentifier` | `com.micpeg.app` | |
-| `LSMinimumSystemVersion` | the chosen target | |
+| `LSMinimumSystemVersion` | `14.0` | See *Deployment target* above |
 | `NSMicrophoneUsageDescription` | one sentence naming the input test | Shown in the TCC prompt. Absent ⇒ the app is killed on first capture |
 | `LSUIElement` | **absent** | A Dock icon is wanted |
 
