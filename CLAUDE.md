@@ -22,6 +22,8 @@ touching the app.
   are wanted, but no `.xcodeproj` enters the repo.
 - The daemon links CoreAudio + Foundation only. No third-party dependencies anywhere.
 - Distribution is a single notarized `Micpeg.app` containing both executables.
+- Minimum macOS 14. SwiftPM's `platforms:` is package-wide, so the daemon inherits it;
+  `@Observable` is the reason it is 14 and not 13. See `docs/app-design.md`.
 - Verified on real hardware only on macOS 26.
 
 ## Architecture principles
