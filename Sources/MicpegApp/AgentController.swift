@@ -44,18 +44,66 @@ final class AgentController {
     private(set) var status: SMAppService.Status
     private(set) var transcript: [Entry] = []
 
+    /// What is installed on this machine, as of the last look. Stage 3: `status` alone was
+    /// never enough — it is keyed on the label, so it answers for whichever agent holds that
+    /// label, including a legacy one this app did not register.
+    private(set) var survey: InstallSurvey
+    /// Set while a migration or repair is running, so the harness can stop a second one being
+    /// started underneath the first.
+    private(set) var busy = false
+
     init() {
         status = service.status
+        survey = InstallSurvey.take()
         note("launched: status = \(Self.describe(status))")
         note("bundle: \(Bundle.main.bundleURL.path)")
         note("BundleProgram target: \(Self.bundleProgramReport())")
+        note("survey: \(survey.verdictName) — \(survey.explanation)")
     }
 
     // MARK: - Operations
 
     func refresh() {
         status = service.status
-        note("refresh: status = \(Self.describe(status))")
+        survey = InstallSurvey.take()
+        note("refresh: status = \(Self.describe(status)), survey = \(survey.verdictName)")
+    }
+
+    // MARK: - Stage 3
+
+    /// Read everything, change nothing.
+    func takeSurvey() {
+        survey = InstallSurvey.take()
+        note("survey:")
+        survey.lines().forEach { note("  " + $0) }
+    }
+
+    /// Tear down the legacy LaunchAgent if there is one, then register this bundle.
+    func migrate() { run("migrate") { Migration.migrate() } }
+
+    /// unregister() then register(), for a registration that no longer resolves here.
+    func repair() { run("repair") { Migration.repair() } }
+
+    /// Offer only — see Migration.linkCLI(). Never called on the app's own initiative.
+    func linkCLI() { run("link") { Migration.linkCLI() } }
+
+    /// These block: they wait on launchd, on a completion handler, and on the daemon writing
+    /// its state file. None of that belongs on the main actor, and a window that stops
+    /// redrawing while it happens would hide exactly the delay worth seeing.
+    private func run(_ label: String, _ body: @escaping @Sendable () -> Migration.Outcome) {
+        guard !busy else { return }
+        busy = true
+        note("\(label): started")
+        Task.detached(priority: .userInitiated) {
+            let outcome = body()
+            await MainActor.run {
+                outcome.lines.forEach { self.note("  " + $0) }
+                self.note("\(label): \(outcome.ok ? "ok" : "DID NOT REACH A HEALTHY STATE")")
+                self.survey = outcome.survey
+                self.status = self.service.status
+                self.busy = false
+            }
+        }
     }
 
     func register() {

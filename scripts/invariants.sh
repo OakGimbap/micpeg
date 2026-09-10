@@ -23,7 +23,17 @@ absent() {
     for d in "$@"; do
         [ -d "$d" ] || continue
         scope="$scope $d"
-        if grep -rn -- "$pattern" "$d"; then hit=1; fi
+        # Whole-line comments do not count. These checks are about what the code does, and
+        # the sentence explaining why a call is forbidden necessarily names the call — an
+        # invariant that fires on its own rationale puts pressure on the rationale, which is
+        # backwards. The awk strips the `path:line:` prefix before testing, so a mention on a
+        # line that also carries code still fails, and a `//` inside a URL does not hide one.
+        found=$(grep -rn -- "$pattern" "$d" | awk '{
+            rest = $0
+            sub(/^[^:]*:[0-9]+:/, "", rest)
+            if (rest !~ /^[[:space:]]*(\/\/|\/\*|\*)/) print
+        }')
+        if [ -n "$found" ]; then printf '%s\n' "$found"; hit=1; fi
     done
     if [ -z "$scope" ]; then
         echo "skip: $label — no target present yet"
@@ -51,6 +61,22 @@ absent "the daemon never names the default output" \
 absent "the daemon cannot open an audio stream" \
        "AVFoundation" \
        Sources/micpeg Sources/MicpegAudio
+
+# Stage 2 measured that `sfltool dumpbtm` demands system.privilege.admin and that authd
+# caches nothing, so every invocation is one more password dialog — 26 of them in a single
+# session of diagnostics. Nothing micpeg ships may ever ask for an administrator password:
+# registering a LaunchAgent is per-user and needs none.
+absent "nothing shipped invokes sfltool" \
+       "sfltool" \
+       Sources/micpeg Sources/MicpegApp Sources/MicpegUI Sources/MicpegAudio
+
+# "Your pinned microphone survives the upgrade" is the entire reason the config was left where
+# the daemon already looks for it, and stage 3's migration is the moment it could be lost. The
+# app reads state.json out of the same directory, so the check names the one file that matters
+# rather than the directory.
+absent "the app never touches the daemon's config" \
+       "config.json" \
+       Sources/MicpegApp Sources/MicpegUI
 
 # The bundle templates carry two mistakes that assemble and sign without complaint.
 #
