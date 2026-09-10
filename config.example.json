@@ -1,0 +1,16 @@
+{
+  "enabled": true,
+  "input": {
+    "priority": [
+      {
+        "uid": "AppleUSBAudioEngine:Elgato Systems:Elgato Wave:1:XXXXXXXXXXXX:2,1",
+        "name": "Elgato Wave:1"
+      }
+    ]
+  },
+  "blockTransports": ["bluetooth", "bluetoothle"],
+  "arrivalWindowSeconds": 15,
+  "debounceMs": 300,
+  "reverifyDelaySeconds": 1.0,
+  "postWriteGraceSeconds": 3.0
+}
