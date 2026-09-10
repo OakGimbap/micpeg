@@ -35,62 +35,52 @@ public struct DaemonState: Equatable, Sendable {
         case yielded = "YIELDED"
         case paused  = "PAUSED"
         case backoff = "BACKOFF"
+        /// A state this app does not know. Decoding it as `.absent` would be the window
+        /// quietly claiming the microphone is missing on the strength of a word it could not
+        /// read; this says so instead.
+        case unknown
     }
 
     public var kind: Kind
-    public var reason: String
-    public var target: String
     public var currentInput: String
-    public var updated: Date?
-    /// The raw string, kept because a state the app does not recognise is worth showing
-    /// rather than silently mapping onto something familiar.
-    public var rawKind: String
 
-    public init(kind: Kind, reason: String, target: String, currentInput: String,
-                updated: Date?, rawKind: String) {
+    public init(kind: Kind, currentInput: String) {
         self.kind = kind
-        self.reason = reason
-        self.target = target
         self.currentInput = currentInput
-        self.updated = updated
-        self.rawKind = rawKind
     }
 
+    /// Only the two fields the window reads. `reason`, `target` and `updated` are in the file
+    /// and are deliberately not decoded, on the same rule `PinnedConfig` states below: a field
+    /// that is not read cannot accidentally end up on screen, and `reason` in particular is
+    /// the daemon's own phrasing.
     private struct Wire: Decodable {
         var state: String
-        var reason: String
-        var target: String
         var currentInput: String
-        var updated: String
     }
 
     /// nil means the daemon has never written a state file here.
     public static func read(from url: URL = DaemonPaths.state) -> DaemonState? {
         guard let data = try? Data(contentsOf: url),
               let wire = try? JSONDecoder().decode(Wire.self, from: data) else { return nil }
-        return DaemonState(kind: Kind(rawValue: wire.state) ?? .absent,
-                           reason: wire.reason,
-                           target: wire.target,
-                           currentInput: wire.currentInput,
-                           updated: stamp.date(from: wire.updated),
-                           rawKind: wire.state)
+        return DaemonState(kind: Kind(rawValue: wire.state) ?? .unknown,
+                           currentInput: wire.currentInput)
     }
 
     /// The daemon's format, and the reason this is not ISO8601: it is the same string that
-    /// goes into the log, so the two can be lined up by eye.
+    /// goes into the log, so the two can be lined up by eye. `ActivityLog` parses log stamps
+    /// with it.
+    ///
+    /// `en_US_POSIX` because a fixed format string without it is interpreted in the user's
+    /// locale. **The daemon's own formatter (`main.swift`, `stampFormatter`) does not set a
+    /// locale**, so on a system configured for a non-Gregorian calendar the two would disagree
+    /// and every activity line would silently vanish. Fixing that is a daemon change and the
+    /// daemon is finished; recorded here rather than done.
     static let stamp: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS"
         f.locale = Locale(identifier: "en_US_POSIX")
         return f
     }()
-
-    /// A state file the daemon stopped updating is the shape a dead daemon leaves behind.
-    /// This says how old it is; whether that is alarming is the caller's judgement, because
-    /// a healthy daemon writes only when something changes and can be quiet for days.
-    public var age: TimeInterval? {
-        updated.map { Date().timeIntervalSince($0) }
-    }
 }
 
 // MARK: - config.json

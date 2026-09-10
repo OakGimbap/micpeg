@@ -23,7 +23,11 @@
 // is deliberate (app-ui.md): the test has to exercise the same path every other application
 // uses, because that path is exactly what is being verified.
 
-import AVFAudio
+// @preconcurrency: AVFAudio predates Sendable annotations, so AVAudioEngine is not Sendable
+// and handing one to a dispatch queue — which is exactly what tearing the tap down after a
+// timeout requires — warns. The engine is created, used and stopped without ever being touched
+// from two places at once.
+@preconcurrency import AVFAudio
 import Foundation
 import Observation
 
@@ -33,8 +37,26 @@ public final class InputTest {
     /// Roughly two seconds of history at 30 Hz.
     public static let slots = 64
 
-    /// Below this, nothing is arriving. See the measurements in `sample()`.
-    public static let silenceThreshold: Float = 0.0005
+    /// The bottom of the meter, in dBFS — and, because they are the same question, the line
+    /// below which the window says nothing is arriving.
+    ///
+    /// They were two unrelated constants at first: a linear `0.0005` in the model and a
+    /// `-60 dBFS` floor in the view, tuned separately, so the bar could sit visibly above the
+    /// bottom while the text said no sound was reaching the microphone. One number, measured:
+    ///
+    ///   Elgato Wave, quiet room     RMS 0.00170-0.00334   ≈ -55 to -50 dBFS
+    ///   built-in mic, lid closed    RMS 0.00000           = silence, no floor reaches it
+    ///
+    /// -66 dBFS sits below the quietest real room seen here and above nothing at all.
+    public nonisolated static let floorDB: Float = -66
+
+    /// RMS to a 0...1 bar height. `nonisolated` because the audio-side diagnostic
+    /// (`MicpegApp meter`) reports in the same units the window draws in.
+    public nonisolated static func level(fromRMS rms: Float) -> Float {
+        guard rms > 0 else { return 0 }
+        let db = 20 * log10f(min(rms, 1))
+        return min(1, max(0, (db - floorDB) / -floorDB))
+    }
 
     public private(set) var isRunning = false
     public private(set) var levels = [Float](repeating: 0, count: InputTest.slots)
@@ -50,7 +72,7 @@ public final class InputTest {
     /// Written from the audio thread, read from the main actor. A tap callback must not touch
     /// observable state — SwiftUI would be asked to redraw from a real-time thread — so the
     /// only thing crossing that boundary is one float behind a lock.
-    private let latest = Latest()
+    private let latest = Locked<Float>(0)
 
     public init() {}
 
@@ -70,8 +92,7 @@ public final class InputTest {
             Task { @MainActor in
                 guard let self else { return }
                 guard granted else {
-                    self.failure = "Micpeg needs permission to use the microphone. "
-                                 + "Allow it in System Settings > Privacy & Security > Microphone."
+                    self.failure = Copy.microphonePermissionDenied
                     return
                 }
                 self.reallyStart()
@@ -100,38 +121,21 @@ public final class InputTest {
     // MARK: - Engine
 
     private func reallyStart() {
-        let engine = AVAudioEngine()
-        self.engine = engine
-        let input = engine.inputNode
-        let format = input.inputFormat(forBus: 0)
-
-        // A device with no channels is not something to open — that is the shape a
-        // disconnected default input leaves behind, and starting on it throws.
-        guard format.channelCount > 0, format.sampleRate > 0 else {
-            failure = "This microphone isn't providing any audio channels right now."
-            self.engine = nil
+        switch Self.openTap(onBuffer: { [latest] buffer in
+            latest.set(Self.level(fromRMS: Self.rms(of: buffer)))
+        }) {
+        case .failure(let error):
+            failure = error.message
             return
-        }
-
-        input.removeTap(onBus: 0)
-        input.installTap(onBus: 0, bufferSize: 1024, format: format) { [latest] buffer, _ in
-            latest.store(Self.rms(of: buffer))
-        }
-
-        observer = NotificationCenter.default.addObserver(
-            forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil
-        ) { [weak self] _ in
-            // Do nothing here. The header is explicit that tearing the engine down inside this
-            // callback can deadlock, because it arrives on an internal dispatch queue.
-            Task { @MainActor in self?.scheduleRestart() }
-        }
-
-        do {
-            try engine.start()
-        } catch {
-            failure = "The microphone could not be opened: \(error.localizedDescription)"
-            self.engine = nil
-            return
+        case .success(let engine):
+            self.engine = engine
+            observer = NotificationCenter.default.addObserver(
+                forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil
+            ) { [weak self] _ in
+                // Do nothing here. The header is explicit that tearing the engine down inside
+                // this callback can deadlock, because it arrives on an internal dispatch queue.
+                Task { @MainActor in self?.scheduleRestart() }
+            }
         }
 
         isRunning = true
@@ -139,16 +143,19 @@ public final class InputTest {
         // 30 Hz, and the redraw happens here rather than in the tap. app-ui.md: "never draw
         // from the tap callback".
         let t = Timer(timeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.sample() }
+            // The timer is on the main runloop and this type is @MainActor, so there is
+            // nothing to hop to — a Task here allocated one per frame and deferred the sample
+            // by a runloop turn for nothing.
+            MainActor.assumeIsolated { self?.sample() }
         }
         // .common so the meter keeps moving while a menu or a sheet is tracking.
         RunLoop.main.add(t, forMode: .common)
         timer = t
     }
 
-    /// A device change moves the default input twice in quick succession — the daemon's 300 ms
-    /// debounce and then its re-verify, roughly 400 ms apart. Restarting on the first one would
-    /// tear the engine down again on the second, so this waits well past both.
+    /// Restarting on the first configuration change would tear the engine down again on the
+    /// second: a device change moves the default input more than once. `DaemonTiming` holds
+    /// the measurement.
     private func scheduleRestart() {
         restart?.cancel()
         let work = DispatchWorkItem { [weak self] in
@@ -159,13 +166,18 @@ public final class InputTest {
             }
         }
         restart = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + DaemonTiming.engineRestart,
+                                      execute: work)
     }
 
     private func sample() {
-        let value = latest.load()
-        levels.removeFirst()
-        levels.append(value)
+        let value = latest.get()
+        // One write to the observable array per frame. `removeFirst` + `append` went through
+        // the observation registrar twice and memmoved the buffer each time.
+        var next = levels
+        next.removeFirst()
+        next.append(value)
+        levels = next
 
         // app-ui.md: after a few seconds below a silence threshold, name the likely causes.
         // One hardware mute switch otherwise reads as "micpeg is broken".
@@ -180,7 +192,7 @@ public final class InputTest {
         // sound was reaching it — the precise false alarm this hint exists to avoid. A room's
         // noise floor is thousandths; a device that is delivering nothing is exactly zero, and
         // that gap is what the threshold has to sit in.
-        if value > Self.silenceThreshold {
+        if value > 0 {
             quietSince = nil
             isSilent = false
         } else if let since = quietSince {
@@ -190,7 +202,43 @@ public final class InputTest {
         }
     }
 
-    /// Run the same tap outside SwiftUI and report what it measures.
+    /// Why the microphone could not be opened, already in the user's words — every caller
+    /// shows this rather than inspecting it.
+    public struct TapFailure: Error, Sendable {
+        public let message: String
+    }
+
+    /// Open the default input and deliver every buffer to `onBuffer`, or say why not.
+    ///
+    /// One place, because there are two callers — the window's meter and `MicpegApp meter` —
+    /// and the diagnostic is only worth anything if it exercises the same path the window
+    /// does. Written twice, "the same tap" was a comment rather than a fact, and the three
+    /// rules the file header quotes from AVFAudio's headers (remove the tap before installing,
+    /// guard the channel count, never tear down inside the notification handler) had to be
+    /// remembered separately in each copy.
+    public nonisolated static func openTap(
+        onBuffer: @escaping @Sendable (AVAudioPCMBuffer) -> Void
+    ) -> Result<AVAudioEngine, TapFailure> {
+        let engine = AVAudioEngine()
+        let input = engine.inputNode
+        let format = input.inputFormat(forBus: 0)
+        // A device with no channels is not something to open — that is the shape a
+        // disconnected default input leaves behind, and starting on it throws.
+        guard format.channelCount > 0, format.sampleRate > 0 else {
+            return .failure(TapFailure(message: Copy.microphoneNoChannels))
+        }
+        input.removeTap(onBus: 0)
+        input.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in
+            onBuffer(buffer)
+        }
+        do { try engine.start() } catch {
+            return .failure(TapFailure(
+                message: Copy.microphoneCouldNotOpen(error.localizedDescription)))
+        }
+        return .success(engine)
+    }
+
+    /// Run the same tap outside SwiftUI and report the raw RMS of every buffer.
     ///
     /// The meter is the one custom-drawn thing in the app, and a meter that never moves is
     /// indistinguishable from a microphone that is muted — which is exactly the confusion the
@@ -200,43 +248,26 @@ public final class InputTest {
     public nonisolated static func measure(seconds: Double,
                                            report: @escaping @Sendable (Float) -> Void,
                                            done: @escaping @Sendable (String?) -> Void) {
-        let engine = AVAudioEngine()
-        let input = engine.inputNode
-        let format = input.inputFormat(forBus: 0)
-        guard format.channelCount > 0, format.sampleRate > 0 else {
-            done("the default input reports \(format.channelCount) channels at"
-                 + " \(format.sampleRate) Hz — nothing to open")
-            return
-        }
-        input.removeTap(onBus: 0)
-        input.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in
-            report(rms(of: buffer))
-        }
-        do { try engine.start() } catch {
-            done("engine.start() failed: \(error.localizedDescription)")
-            return
-        }
-        DispatchQueue.global().asyncAfter(deadline: .now() + seconds) {
-            input.removeTap(onBus: 0)
-            engine.stop()
-            done(nil)
+        switch openTap(onBuffer: { report(rms(of: $0)) }) {
+        case .failure(let error):
+            done(error.message)
+        case .success(let engine):
+            DispatchQueue.global().asyncAfter(deadline: .now() + seconds) {
+                engine.inputNode.removeTap(onBus: 0)
+                engine.stop()
+                done(nil)
+            }
         }
     }
 
-    static func rms(of buffer: AVAudioPCMBuffer) -> Float {
+    /// `nonisolated`: this runs on the audio render thread, which is the whole reason the
+    /// result crosses to the main actor through a lock rather than being touched here.
+    nonisolated static func rms(of buffer: AVAudioPCMBuffer) -> Float {
         guard let channel = buffer.floatChannelData?[0] else { return 0 }
         let count = Int(buffer.frameLength)
         guard count > 0 else { return 0 }
         var sum: Float = 0
         for i in 0..<count { sum += channel[i] * channel[i] }
         return (sum / Float(count)).squareRoot()
-    }
-
-    /// One float, written on the audio thread and read on the main actor.
-    private final class Latest: @unchecked Sendable {
-        private var value: Float = 0
-        private let lock = NSLock()
-        func store(_ new: Float) { lock.lock(); value = new; lock.unlock() }
-        func load() -> Float { lock.lock(); defer { lock.unlock() }; return value }
     }
 }

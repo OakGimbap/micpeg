@@ -23,20 +23,22 @@ import Foundation
 /// bursts. Stops when deinitialised.
 public final class DirectoryWatch {
     private let directory: URL
-    private let onChange: @MainActor () -> Void
     private var source: DispatchSourceFileSystemObject?
     private var descriptor: CInt = -1
     private var pollTimer: DispatchSourceTimer?
-    private var coalesce: DispatchWorkItem?
     private let queue = DispatchQueue(label: "com.micpeg.app.watch")
+    private let coalescer: Coalescer
 
     public init(directory: URL, onChange: @escaping @MainActor () -> Void) {
         self.directory = directory
-        self.onChange = onChange
+        self.coalescer = Coalescer(delay: DaemonTiming.coalesce,
+                                   queue: DispatchQueue(label: "com.micpeg.app.watch.coalesce"),
+                                   onFire: onChange)
         queue.async { [weak self] in self?.attachOrPoll() }
     }
 
     deinit {
+        coalescer.cancel()
         source?.cancel()
         pollTimer?.cancel()
         // The cancel handler closes `descriptor`; if no source was ever created, close it here.
@@ -66,14 +68,14 @@ public final class DirectoryWatch {
             if s.data.contains(.delete) || s.data.contains(.rename) {
                 self.reattach()
             }
-            self.fire()
+            self.coalescer.schedule()
         }
         s.setCancelHandler { close(fd) }
         source = s
         s.resume()
         pollTimer?.cancel()
         pollTimer = nil
-        fire()
+        coalescer.schedule()
     }
 
     private func reattach() {
@@ -97,16 +99,4 @@ public final class DirectoryWatch {
         t.resume()
     }
 
-    // MARK: - Firing
-
-    /// One callback per burst. The daemon can write state.json twice in quick succession — a
-    /// revert moves the device and then re-verifies — and redrawing twice for that is noise.
-    private func fire() {
-        coalesce?.cancel()
-        let work = DispatchWorkItem { [onChange] in
-            Task { @MainActor in onChange() }
-        }
-        coalesce = work
-        queue.asyncAfter(deadline: .now() + 0.15, execute: work)
-    }
 }

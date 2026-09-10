@@ -135,22 +135,27 @@ enum Headless {
     /// what matters is whether anything arrived at all and how loud it was.
     private static func runMeter(seconds: Double) -> Bool {
         report("opening the default input for \(seconds)s — this uses the microphone")
-        let samples = Samples()
+        let samples = Locked<[Float]>([])
         let finished = DispatchSemaphore(value: 0)
-        var failure: String?
-        InputTest.measure(seconds: seconds, report: { samples.add($0) }) { error in
-            failure = error
+        let failure = Locked<String?>(nil)
+        InputTest.measure(seconds: seconds, report: { value in
+            samples.withValue { $0.append(value) }
+        }) { error in
+            failure.set(error)
             finished.signal()
         }
         if finished.wait(timeout: .now() + seconds + 10) == .timedOut {
             report("TIMED OUT waiting for the tap to finish")
             return false
         }
-        if let failure {
-            report("FAILED: \(failure)")
+        if let message = failure.get() {
+            report("FAILED: \(message)")
             return false
         }
-        let (count, peak, mean) = samples.summary()
+        let values = samples.get()
+        let count = values.count
+        let peak = values.max() ?? 0
+        let mean = count == 0 ? 0 : values.reduce(0, +) / Float(count)
         report("buffers:  \(count)")
         report("peak RMS: \(String(format: "%.5f", peak))")
         report("mean RMS: \(String(format: "%.5f", mean))")
@@ -159,25 +164,14 @@ enum Headless {
                  + " quiet room; it is a stream that is not running.")
             return false
         }
-        let threshold = InputTest.silenceThreshold
-        report(peak > threshold
-               ? "audio is reaching the microphone (the window's silence threshold is"
-                 + " \(threshold))"
-               : "everything is below the window's \(threshold) silence threshold — the window"
-                 + " would say \"No sound is reaching this microphone\"")
+        // Reported in the window's own units so the two cannot drift: the meter's floor and
+        // the "no sound" line are the same number.
+        report(InputTest.level(fromRMS: peak) > 0
+               ? "audio is reaching the microphone (the meter's floor is"
+                 + " \(InputTest.floorDB) dBFS)"
+               : "everything is at or below the meter's \(InputTest.floorDB) dBFS floor — the"
+                 + " window would say \"No sound is reaching this microphone\"")
         return true
-    }
-
-    private final class Samples: @unchecked Sendable {
-        private var values: [Float] = []
-        private let lock = NSLock()
-        func add(_ v: Float) { lock.lock(); values.append(v); lock.unlock() }
-        func summary() -> (Int, Float, Float) {
-            lock.lock(); defer { lock.unlock() }
-            guard !values.isEmpty else { return (0, 0, 0) }
-            return (values.count, values.max() ?? 0,
-                    values.reduce(0, +) / Float(values.count))
-        }
     }
 
     private static func attempt(_ label: String, _ body: () throws -> Void) -> Bool {

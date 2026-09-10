@@ -22,6 +22,7 @@
 
 import Darwin
 import Foundation
+import MicpegUI
 import ServiceManagement
 
 /// Where the `micpeg` on the user's PATH points, if it is there at all.
@@ -183,12 +184,12 @@ struct InstallSurvey {
                 ?? (root["Program"] as? String)
         }
 
-        let state = home.appendingPathComponent(".config/micpeg/state.json")
-        let updated = (try? fm.attributesOfItem(atPath: state.path)[.modificationDate]) as? Date
+        let updated = (try? fm.attributesOfItem(atPath: DaemonPaths.state.path)[.modificationDate])
+            as? Date
 
         return InstallSurvey(
             bundleURL: bundle,
-            bundledDaemon: bundle.appendingPathComponent("Contents/MacOS/micpeg"),
+            bundledDaemon: MicpegCLI.bundledExecutable,
             legacyPlist: plist,
             legacyPlistExists: fm.fileExists(atPath: plist.path),
             legacyProgram: program,

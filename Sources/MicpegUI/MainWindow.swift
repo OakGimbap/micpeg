@@ -32,7 +32,7 @@ public struct MainWindow: View {
 
     @State private var showingPicker = false
     @State private var errorMessage: String?
-    @State private var test = InputTest()
+    @State private var test: InputTest
 
     public init(model: AppModel,
                 onBannerAction: @escaping (AppModel.Banner.Action) -> Void,
@@ -40,6 +40,9 @@ public struct MainWindow: View {
         self.model = model
         self.onBannerAction = onBannerAction
         self.onFirstChoice = onFirstChoice
+        // Not a default value on the property: that expression is evaluated on every struct
+        // init, allocating an InputTest that SwiftUI immediately discards.
+        _test = State(wrappedValue: InputTest())
     }
 
     public var body: some View {
@@ -48,16 +51,20 @@ public struct MainWindow: View {
                 Section { BannerRow(banner: banner, act: onBannerAction) }
             }
             if let errorMessage {
+                // Not a Banner. Assembling one with an empty body and a no-op action, purely
+                // to reuse BannerRow, is what put an `if !body.isEmpty` branch inside
+                // BannerRow and made every reader check whether a button could appear here.
                 Section {
-                    BannerRow(banner: .init(severity: .warning, title: errorMessage,
-                                            body: "", actionTitle: nil, action: nil),
-                              act: { _ in })
+                    Label(errorMessage, systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(.orange)
                 }
             }
 
             switch model.body {
             case .unconfigured: unconfigured
-            case .configured:   configured
+            // Same body: the daemon is still enforcing the settings it loaded last, so the
+            // rows and the meter are all true. The banner says what is wrong with the file.
+            case .configured, .settingsUnreadable: configured
             }
         }
         .formStyle(.grouped)
@@ -71,10 +78,15 @@ public struct MainWindow: View {
         .frame(width: 460)
         .sheet(isPresented: $showingPicker) {
             DevicePicker(model: model) { device in
-                errorMessage = model.pick(device)
+                Task { errorMessage = await model.pick(device) }
             }
         }
-        .onDisappear { test.stop() }
+        .onDisappear {
+            test.stop()
+            // Releases the directory descriptor, its dispatch source and three HAL listeners.
+            // They used to stay installed for the life of the process.
+            model.stopWatching()
+        }
     }
 
     // MARK: - Unconfigured
@@ -88,14 +100,21 @@ public struct MainWindow: View {
         }
         Section {
             DeviceList(model: model, selection: $pendingChoice)
+                // Seed the selection once rather than teaching the list a second rule about
+                // what nil means. The sheet's Done button reads nil as "nothing chosen" and
+                // disables itself; a list that also drew the current input as selected while
+                // the binding was nil made the two disagree.
+                .task { pendingChoice = pendingChoice ?? model.currentInput?.id }
         } footer: {
             Text(Copy.deviceListFooter)
         }
         Section {
             Button(Copy.keepButton(pendingChoiceName)) {
                 guard let device = pendingDevice else { return }
-                errorMessage = model.pick(device)
-                if errorMessage == nil { onFirstChoice() }
+                Task {
+                    errorMessage = await model.pick(device)
+                    if errorMessage == nil { onFirstChoice() }
+                }
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
@@ -110,7 +129,7 @@ public struct MainWindow: View {
     @State private var pendingChoice: AudioDeviceID?
 
     private var pendingDevice: AudioDevice? {
-        model.inputs.first { $0.id == pendingChoice } ?? model.currentInput
+        model.inputs.first { $0.id == pendingChoice }
     }
     private var pendingChoiceName: String { pendingDevice?.name ?? Copy.noDevice }
 
@@ -174,7 +193,7 @@ public struct MainWindow: View {
                 Button(Copy.changeMicrophone) { showingPicker = true }
                 Spacer()
                 Button(model.isPaused ? Copy.resume : Copy.pause) {
-                    errorMessage = model.setPaused(!model.isPaused)
+                    Task { errorMessage = await model.setPaused(!model.isPaused) }
                 }
             }
         }
@@ -194,11 +213,9 @@ struct BannerRow: View {
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
                 Text(banner.title).fontWeight(.medium)
-                if !banner.body.isEmpty {
-                    Text(banner.body)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+                Text(banner.body)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 8)
             if let title = banner.actionTitle, let action = banner.action {
@@ -235,7 +252,6 @@ struct DeviceList: View {
             } label: {
                 HStack {
                     Image(systemName: selection == device.id
-                          || (selection == nil && device.id == model.currentInput?.id)
                           ? "largecircle.fill.circle" : "circle")
                         .foregroundStyle(.tint)
                         .accessibilityHidden(true)

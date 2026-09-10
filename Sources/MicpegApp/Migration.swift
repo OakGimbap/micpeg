@@ -25,6 +25,7 @@
 //     how an upgrade silently breaks a working setup. It is offered, never taken.
 
 import Foundation
+import MicpegUI
 import ServiceManagement
 
 enum Migration {
@@ -225,9 +226,7 @@ enum Migration {
     private static func waitForDaemon(since start: Date, replacing previousPID: pid_t?) -> [String] {
         var out: [String] = []
         let deadline = Date().addingTimeInterval(spawnTimeout)
-        let mine = Bundle.main.bundleURL
-            .appendingPathComponent("Contents/MacOS/micpeg")
-            .resolvingSymlinksInPath()
+        let mine = MicpegCLI.bundledExecutable.resolvingSymlinksInPath()
 
         var last = InstallSurvey.take()
         while Date() < deadline {
@@ -274,7 +273,7 @@ enum Migration {
     /// what allows it to replace the legacy copy, and is why this is never called unasked.
     static func linkCLI() -> Outcome {
         var lines: [String] = []
-        let daemon = Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/micpeg")
+        let daemon = MicpegCLI.bundledExecutable
         let (status, output) = InstallSurvey.run(daemon.path, ["link", "--force"])
         lines.append("\(daemon.path) link --force → status \(status)")
         for line in output.split(separator: "\n") { lines.append("  \(line)") }
