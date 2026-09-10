@@ -70,12 +70,21 @@ absent "nothing shipped invokes sfltool" \
        "sfltool" \
        Sources/micpeg Sources/MicpegApp Sources/MicpegUI Sources/MicpegAudio
 
-# "Your pinned microphone survives the upgrade" is the entire reason the config was left where
-# the daemon already looks for it, and stage 3's migration is the moment it could be lost. The
-# app reads state.json out of the same directory, so the check names the one file that matters
-# rather than the directory.
-absent "the app never touches the daemon's config" \
-       "config.json" \
+# The app reads config.json — app-ui.md's "unconfigured" state is defined by an empty priority
+# list, and state.json cannot answer it: an unset target and a target that is merely unplugged
+# both read as "(absent)". Reading it is fine. Writing it is not, and the first draft of this
+# check said "config.json" and so forbade both.
+#
+# The replacement is stronger than a check aimed at that one file: **the app writes no file
+# contents at all.** Every mutation goes through the CLI (app-design.md's routing table), so
+# there is nothing for the app to write, and the pinned device cannot be lost to a bug in code
+# that was only ever supposed to display it. Its one filesystem change is removing the legacy
+# plist during migration, which is a deletion and is the whole point of stage 3.
+absent "the app writes no file contents" \
+       "\.write(to:" \
+       Sources/MicpegApp Sources/MicpegUI
+absent "the app creates no files" \
+       "createFile" \
        Sources/MicpegApp Sources/MicpegUI
 
 # The bundle templates carry two mistakes that assemble and sign without complaint.
@@ -109,7 +118,11 @@ fi
 
 # One call to setDefaultInputDevice is the whole argument that input-only is structural
 # rather than a habit. Count it.
-writes=$(grep -rc AudioObjectSetPropertyData Sources | awk -F: '{n+=$2} END {print n+0}')
+writes=$(grep -rn AudioObjectSetPropertyData Sources | awk '{
+    rest = $0
+    sub(/^[^:]*:[0-9]+:/, "", rest)
+    if (rest !~ /^[[:space:]]*(\/\/|\/\*|\*)/) n++
+} END { print n+0 }')
 if [ "$writes" = "1" ]; then
     echo "ok:   exactly one CoreAudio write in Sources/"
 else

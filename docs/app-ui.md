@@ -26,6 +26,16 @@ availability moves, and the system's visual language has changed materially in r
 Where this document and Apple's documentation disagree, Apple wins — but say so, and correct
 this file. Where a claim here is marked *unverified*, verify it rather than propagating it.
 
+**Stage 4 note on how much of this was actually obtainable.** The API rows were read from the
+SDK Xcode ships, which is Apple's own documentation and more precise than the web pages:
+`SwiftUI.swiftinterface`/`SwiftUICore.swiftinterface` for the containers and `Canvas`
+(`macOS 12.0`, fine here), and `AVAudioEngine.h`/`AVAudioNode.h`/`AVAudioApplication.h` for the
+audio. **The HIG rows could not be fetched at all** — developer.apple.com/design renders in
+JavaScript and the DocC JSON endpoint 404s. No spacing or margin numbers were taken from
+memory or from search results; the window sets one width and delegates every other measurement
+to `Form`, which is what the Layout section below already required. See
+[`verification.md`](verification.md).
+
 ## The governing idea
 
 micpeg does the job that **System Settings → Sound** should have done. Matching that pane's
@@ -210,6 +220,7 @@ availability against Apple's documentation.
 | Label/value row | `LabeledContent` |
 | Caption below a group | the section's footer |
 | Device list (sheet) | `List` + an inset list style |
+| Window sizing | `.scrollDisabled(true)` on the `Form` — it is a scroll view, and without this the window takes a default height instead of its content's |
 | Primary action | `.buttonStyle(.borderedProminent)`, large control size |
 | Secondary action | `.buttonStyle(.bordered)` |
 | Icon-only action | `.buttonStyle(.borderless)` + `.help()` + an accessibility label |
@@ -218,6 +229,12 @@ availability against Apple's documentation.
 | Level meter | `Canvas` |
 | Icons | SF Symbols only — `mic`, `speaker.wave.2`, `checkmark.circle.fill`, `info.circle`, `exclamationmark.triangle`, `pause.circle` |
 | Colors | semantic only — `.primary`, `.secondary`, `.tint`. Red exclusively for `BACKOFF` and approval failure |
+
+**The device list is not "every device with an input scope".** Aggregate-transport devices are
+excluded: while any application holds the default input open — including this app's own input
+test — the HAL publishes a transient `CADefaultDeviceAggregate-<pid>-<n>` that has an input
+scope and is not a microphone. `kAudioDevicePropertyIsHidden` does not mark it. Measured, see
+[`verification.md`](verification.md).
 
 Changing the pinned microphone happens in a **sheet**, not inline. An always-visible list
 invites a misclick that silently repins, and this app is not opened often enough for the mistake
@@ -249,7 +266,14 @@ Behavior:
   300 ms. A revert moves the device twice roughly 400 ms apart.
 - Stop the engine when the test stops, the window closes, or the app deactivates. A microphone
   indicator left lit is worse than a missing feature.
-- After a few seconds below a silence threshold, name the likely causes:
+- After a few seconds below a silence threshold, name the likely causes. **Calibrate the
+  threshold against a working microphone, not against zero.** Measured: a quiet room reads an
+  RMS of ~0.0017 and a device that is delivering nothing reads exactly 0.00000, so a threshold
+  of 0.01 tells a working microphone it is silent. `MicpegApp meter` prints these numbers.
+- **A closed lid is a likely cause and belongs in the hint.** With the lid shut and an external
+  display attached, the built-in microphone is still listed, still unmuted, still reports an
+  input volume — and delivers zeros. The hint names that first when the silent device is the
+  built-in one.
 
 ```
 │   ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁      [ Stop Test ]  │
@@ -292,6 +316,9 @@ Not optional, and cheap when the standard components are used.
 - Honor Reduce Motion and Increase Contrast
 - The device list must be fully keyboard navigable, with a visible focus ring
 - Verify with VoiceOver and with full keyboard access enabled
+- **Do not read the tree with AppleScript's `title of`.** SwiftUI publishes a control's label
+  as `AXDescription`, so `title` is empty for every button and the window looks unlabelled when
+  it is not. Use the accessibility API directly. Stage 4 lost time to this.
 
 ## App icon
 

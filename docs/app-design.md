@@ -314,6 +314,7 @@ Reads and writes take different routes, and the asymmetry is deliberate.
 | | Route |
 |---|---|
 | Device list, current input, current output | The app reads CoreAudio directly, via `MicpegAudio` |
+| Is anything configured at all | `~/.config/micpeg/config.json`, **read only** |
 | Live changes | The app registers its own listeners while the window is visible |
 | Daemon state | `~/.config/micpeg/state.json`, watched |
 | Recent activity | `~/Library/Logs/micpeg.log`, tail-parsed |
@@ -321,6 +322,13 @@ Reads and writes take different routes, and the asymmetry is deliberate.
 
 The app cannot write to CoreAudio because the invariant forbids it and CI enforces it. That
 constraint is what makes the routing table above a structural fact rather than a convention.
+
+`config.json` is read because nothing else answers "has this person chosen a microphone yet".
+`state.json` reports `(absent)` both for a target that was never set and for one that is merely
+unplugged, and app-ui.md's unconfigured state is the first of those. Reading it is safe;
+writing it is what would lose someone's pinned device during an upgrade, so the CI check is a
+ban on the app writing **any** file rather than a ban on naming that one — it has nothing to
+write, because every mutation goes through the CLI.
 
 Three CLI changes are needed, and no more:
 
@@ -421,9 +429,12 @@ Confirm each before building on it, and record results in [`verification.md`](ve
 | The bundled agent can keep a log | Read `fd 2` of the running daemon | **fixed** (stage 2) — the daemon opens the file itself |
 | Anything micpeg ships needs an administrator password | Read every `authd` authorization in a session | **never** (stage 2) — agent registration is per-user |
 | `com.apple.security.device.audio-input` is required under hardened runtime | Build a notarized copy without it and see whether the prompt appears | open — the entitlement is attached and verified, its *necessity* is not |
-| `AVAudioEngine` recovers from a device change mid-test | Start a test, connect a headset, watch the meter | open |
+| `AVAudioEngine` recovers from a device change mid-test | Start a test, connect a headset, watch the meter | **confirmed** (stage 4) — the engine stops itself and the app restarts it |
+| The microphone permission prompt appears when the test starts | Press Start Test on a machine that has never granted it | **confirmed** (stage 4) — TCC created the record on the first press |
 | Pinning input keeps AirPods in A2DP (the README claim) | Play audio, connect, compare before/after | open |
-| SwiftUI previews work against a SwiftPM library target in the current Xcode | Open `Package.swift`, add a preview, run it | open |
+| SwiftUI previews work against a SwiftPM library target in the current Xcode | Open `Package.swift`, add a preview, run it | **partly** (stage 4) — the macro produces the `PreviewRegistry` types Xcode discovers; the canvas cannot be driven from a shell |
+| The app can tell a silent microphone from a quiet room | Measure RMS on both | **only with a measured threshold** (stage 4) — 0.01 called a working microphone silent |
+| Every device with an input scope is a microphone | List devices while an input test is running | **false** (stage 4) — the HAL publishes a transient aggregate device |
 
 ## Build order
 
