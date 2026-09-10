@@ -18,8 +18,11 @@ In priority order, as stated by the person who needed this:
 3. **Respect manual selection.** If the user deliberately picks another microphone, leave it.
 
 Constraint 1 is enforced structurally rather than by discipline: output keys are absent from
-the config schema, so there is nothing to switch on. `grep -c DefaultOutputDevice
-Sources/micpeg/main.swift` returns 0.
+the config schema, so there is nothing to switch on. The grep that used to carry this claim
+(`grep -c DefaultOutputDevice Sources/micpeg/main.swift`) got weaker when the read-only
+helpers moved into `MicpegAudio`, so `scripts/invariants.sh` now checks the daemon target and
+the shared helpers together, and additionally counts the CoreAudio writes in the whole
+project: there is exactly one, and it is `setDefaultInputDevice`.
 
 ---
 

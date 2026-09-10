@@ -162,6 +162,11 @@ Micpeg.app/Contents/
   Resources/AppIcon.icns
 ```
 
+**This layout does not survive a case-insensitive filesystem, which is the macOS default.**
+`MacOS/Micpeg` and `MacOS/micpeg` resolve to a single file on APFS as shipped — measured, see
+[`verification.md`](verification.md) — so the second copy silently overwrites the first. The
+names have to change before stage 2 assembles anything.
+
 `Info.plist` keys that matter:
 
 | Key | Value | Why |

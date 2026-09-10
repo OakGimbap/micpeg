@@ -26,6 +26,11 @@ jobs:
           lipo -info "$BIN"
           otool -l "$BIN" | grep -A3 LC_BUILD_VERSION
 
+      # The invariants in CLAUDE.md, enforced rather than trusted. The script prints the
+      # directories it actually searched, so a check cannot pass by looking at nothing.
+      - name: Structural invariants
+        run: ./scripts/invariants.sh
+
       # The repo must never carry device identifiers. This is the enforcement.
       - name: No device identifiers committed
         run: |

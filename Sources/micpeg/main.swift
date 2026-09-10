@@ -7,6 +7,7 @@
 import CoreAudio
 import Darwin
 import Foundation
+import MicpegAudio
 
 // MARK: - Paths
 
@@ -30,41 +31,13 @@ func log(_ message: String) {
     fputs("\(stampFormatter.string(from: Date())) \(message)\n", stderr)
 }
 
-// MARK: - CoreAudio helpers
+// MARK: - CoreAudio
 
-let systemObject = AudioObjectID(kAudioObjectSystemObject)
-
-func addr(_ selector: AudioObjectPropertySelector,
-          _ scope: AudioObjectPropertyScope = kAudioObjectPropertyScopeGlobal)
-    -> AudioObjectPropertyAddress {
-    // kAudioObjectPropertyElementMain, not the deprecated ...Master.
-    AudioObjectPropertyAddress(mSelector: selector,
-                               mScope: scope,
-                               mElement: kAudioObjectPropertyElementMain)
-}
-
-func fourCC(_ v: UInt32) -> String {
-    if v == 0 { return "none" }
-    let bytes = [UInt8((v >> 24) & 0xff), UInt8((v >> 16) & 0xff),
-                 UInt8((v >> 8) & 0xff), UInt8(v & 0xff)]
-    guard let s = String(bytes: bytes, encoding: .ascii),
-          s.unicodeScalars.allSatisfy({ $0.value >= 32 && $0.value < 127 }) else {
-        return String(v)
-    }
-    return s
-}
-
-func osStatusText(_ st: OSStatus) -> String {
-    "\(st) (\(fourCC(UInt32(bitPattern: st))))"
-}
-
-func defaultInputDevice() -> AudioDeviceID? {
-    var a = addr(kAudioHardwarePropertyDefaultInputDevice)
-    var id = AudioDeviceID(0)
-    var size = UInt32(MemoryLayout<AudioDeviceID>.size)
-    let st = AudioObjectGetPropertyData(systemObject, &a, 0, nil, &size, &id)
-    return (st == noErr && id != 0) ? id : nil
-}
+// The read-only helpers (addr, allDevices, deviceUID, hasInput, transportType, …) live
+// in the MicpegAudio module now, shared with the app. What stays here is the project's
+// only CoreAudio write. It stays in the daemon target on purpose: docs/app-design.md
+// turns "the app writes nothing to CoreAudio" into a CI grep, and that grep only means
+// something while this function has exactly one home.
 
 @discardableResult
 func setDefaultInputDevice(_ id: AudioDeviceID) -> OSStatus {
@@ -72,87 +45,6 @@ func setDefaultInputDevice(_ id: AudioDeviceID) -> OSStatus {
     var v = id
     return AudioObjectSetPropertyData(systemObject, &a, 0, nil,
                                       UInt32(MemoryLayout<AudioDeviceID>.size), &v)
-}
-
-/// Resolve a UID straight to a device. Cheaper than enumerating, and we never
-/// cache the resulting AudioDeviceID — it changes across replug and HAL resets.
-func deviceID(forUID uid: String) -> AudioDeviceID? {
-    var a = addr(kAudioHardwarePropertyTranslateUIDToDevice)
-    var cf = uid as CFString
-    var out = AudioDeviceID(0)
-    var size = UInt32(MemoryLayout<AudioDeviceID>.size)
-    let st = withUnsafeMutablePointer(to: &cf) { p -> OSStatus in
-        AudioObjectGetPropertyData(systemObject, &a,
-                                   UInt32(MemoryLayout<CFString>.size), p,
-                                   &size, &out)
-    }
-    return (st == noErr && out != 0) ? out : nil
-}
-
-/// CFString getters hand back a +1 reference — the caller owns it.
-func deviceString(_ id: AudioObjectID, _ selector: AudioObjectPropertySelector) -> String? {
-    var a = addr(selector)
-    var unmanaged: Unmanaged<CFString>? = nil
-    var size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
-    let st = AudioObjectGetPropertyData(id, &a, 0, nil, &size, &unmanaged)
-    guard st == noErr, let u = unmanaged else { return nil }
-    return u.takeRetainedValue() as String
-}
-
-func deviceUID(_ id: AudioDeviceID) -> String? {
-    deviceString(id, kAudioDevicePropertyDeviceUID)
-}
-
-func deviceName(_ id: AudioDeviceID) -> String {
-    deviceString(id, kAudioObjectPropertyName) ?? "device \(id)"
-}
-
-func transportType(_ id: AudioDeviceID) -> UInt32 {
-    var a = addr(kAudioDevicePropertyTransportType)
-    var v: UInt32 = 0
-    var size = UInt32(MemoryLayout<UInt32>.size)
-    let st = AudioObjectGetPropertyData(id, &a, 0, nil, &size, &v)
-    return st == noErr ? v : 0
-}
-
-/// The Wave:1 is 1-in / 2-out, so the scope discrimination here decides the answer.
-/// Size-only query: no allocation.
-func hasInput(_ id: AudioDeviceID) -> Bool {
-    var a = addr(kAudioDevicePropertyStreams, kAudioObjectPropertyScopeInput)
-    var size: UInt32 = 0
-    let st = AudioObjectGetPropertyDataSize(id, &a, 0, nil, &size)
-    return st == noErr && size > 0
-}
-
-func allDevices() -> [AudioDeviceID] {
-    var a = addr(kAudioHardwarePropertyDevices)
-    var size: UInt32 = 0
-    guard AudioObjectGetPropertyDataSize(systemObject, &a, 0, nil, &size) == noErr else { return [] }
-    let capacity = Int(size) / MemoryLayout<AudioDeviceID>.size
-    guard capacity > 0 else { return [] }
-    var ids = [AudioDeviceID](repeating: 0, count: capacity)
-    // Trust the byte count the fetch reports, not the earlier size query: a device
-    // unplugged between the two calls would otherwise leave trailing zero IDs.
-    var written = size
-    guard AudioObjectGetPropertyData(systemObject, &a, 0, nil, &written, &ids) == noErr else { return [] }
-    let n = min(capacity, Int(written) / MemoryLayout<AudioDeviceID>.size)
-    return ids.prefix(n).filter { $0 != 0 }
-}
-
-let transportNames = ["bluetooth", "bluetoothle", "usb", "builtin",
-                      "virtual", "aggregate", "displayport"]
-
-func transportCode(_ name: String) -> UInt32? {
-    switch name.lowercased() {
-    case "bluetooth":   return kAudioDeviceTransportTypeBluetooth
-    case "bluetoothle": return kAudioDeviceTransportTypeBluetoothLE
-    case "usb":         return kAudioDeviceTransportTypeUSB
-    case "builtin":     return kAudioDeviceTransportTypeBuiltIn
-    case "virtual":     return kAudioDeviceTransportTypeVirtual
-    case "aggregate":   return kAudioDeviceTransportTypeAggregate
-    case "displayport": return kAudioDeviceTransportTypeDisplayPort
-    default:            return nil
-    }
 }
 
 // MARK: - Config
@@ -965,6 +857,40 @@ func runningExecutable() -> URL? {
     return fm.isExecutableFile(atPath: u.path) ? u.resolvingSymlinksInPath() : nil
 }
 
+/// The .app enclosing the running executable, if there is one.
+///
+/// runningExecutable() resolves symlinks, and that is load-bearing rather than tidy:
+/// measured on macOS 26, running the CLI through a symlink in ~/.local/bin leaves
+/// Bundle.main.bundlePath pointing at ~/.local/bin, not at the app. A check that
+/// skipped the resolution would miss precisely the case this exists to catch — a user
+/// with the bundled CLI on their PATH.
+func enclosingAppBundle() -> URL? {
+    guard let exe = runningExecutable() else { return nil }
+    var dir = exe.deletingLastPathComponent()
+    while dir.path != "/" {
+        if dir.pathExtension == "app" { return dir }
+        let parent = dir.deletingLastPathComponent()
+        if parent.path == dir.path { break }
+        dir = parent
+    }
+    return nil
+}
+
+/// One registration path, enforced rather than documented. `micpeg install` writes the
+/// legacy plist under the same label the app registers through SMAppService; run from
+/// inside the bundle it would resurrect the two-agents-one-label conflict that the
+/// shared label exists to make impossible.
+func refuseInsideBundle(_ command: String) {
+    guard let app = enclosingAppBundle() else { return }
+    let appName = app.lastPathComponent
+    print("error: this copy of micpeg lives inside \(appName), which registers the")
+    print("       background agent itself. `micpeg \(command)` manages the separate,")
+    print("       hand-written LaunchAgent, and one label cannot have two registration")
+    print("       paths — that is exactly the conflict the shared label makes loud.")
+    print("       Open \(appName) to turn the agent on or off.")
+    exit(1)
+}
+
 // MARK: - Subcommands
 
 func cmdList() {
@@ -1033,12 +959,40 @@ func cmdEnable(_ on: Bool) {
     nudgeDaemon()
 }
 
-func cmdPick() {
-    guard let id = defaultInputDevice() else {
-        print("error: no default input device to capture"); exit(1)
-    }
-    guard let uid = deviceUID(id) else {
-        print("error: device has no UID; refusing to pin by name alone"); exit(1)
+/// `micpeg pick` captures the current default input; `micpeg pick <uid>` names a device
+/// directly, which is how the app pins the one the user chose in its device sheet.
+func cmdPick(_ requestedUID: String?) {
+    let id: AudioDeviceID
+    let uid: String
+    if let want = requestedUID {
+        // Resolve through 'uidd' rather than trusting the string: the app and the daemon
+        // then agree by construction, and a UID that does not resolve simply means the
+        // device is not here right now.
+        guard let resolved = deviceID(forUID: want) else {
+            print("error: no connected device has uid \(want)")
+            print("       run `micpeg list` to see what is connected.")
+            exit(1)
+        }
+        // resolveTarget() requires an input scope, so pinning an output-only device is
+        // accepted and then never enforced — the daemon would sit in ABSENT for good.
+        // Refuse instead of producing a pin that cannot act.
+        guard hasInput(resolved) else {
+            print("error: \(deviceName(resolved)) publishes no input scope, so pinning it")
+            print("       would leave the daemon with nothing to enforce.")
+            exit(1)
+        }
+        id = resolved
+        // Store what the device calls itself, not what the caller typed.
+        uid = deviceUID(resolved) ?? want
+    } else {
+        guard let current = defaultInputDevice() else {
+            print("error: no default input device to capture"); exit(1)
+        }
+        guard let currentUID = deviceUID(current) else {
+            print("error: device has no UID; refusing to pin by name alone"); exit(1)
+        }
+        id = current
+        uid = currentUID
     }
     let name = deviceName(id)
     var cfg = configForMutation()
@@ -1053,7 +1007,61 @@ func cmdPick() {
     nudgeDaemon()
 }
 
+/// Put `micpeg` on the user's PATH, pointing at this binary. Invoked by the app;
+/// optional for the user.
+///
+/// A symlink rather than a copy. An app update replaces the executable inside the
+/// bundle, and a copy would keep serving the old one — the same staleness that forced
+/// scripts/install.sh to stage the binary itself because `micpeg install` only copies
+/// when the destination is missing.
+func cmdLink(force: Bool) {
+    let fm = FileManager.default
+    guard let src = runningExecutable() else {
+        print("error: could not locate the running micpeg binary to link to."); exit(1)
+    }
+    let dest = binPath
+    let dir = dest.deletingLastPathComponent()
+
+    // lstat, not FileManager.fileExists: fileExists follows symlinks, so a link left
+    // dangling by a deleted app reads as "nothing there" and the create below then
+    // fails with EEXIST. lstat sees the link itself.
+    var info = stat()
+    let present = lstat(dest.path, &info) == 0
+    let isSymlink = present && (info.st_mode & S_IFMT) == S_IFLNK
+
+    // --force removes what is in the way, and a directory is the one thing it must never
+    // remove: this command promises a symlink, not a recursive delete.
+    if present && (info.st_mode & S_IFMT) == S_IFDIR {
+        print("error: \(dest.path) is a directory. Refusing to touch it."); exit(1)
+    }
+
+    if present && !isSymlink && !force {
+        // A regular file here is the legacy install — a real binary that launchd may
+        // still be running. Replacing it unasked is how an upgrade silently breaks a
+        // setup that was working.
+        print("error: \(dest.path) already exists and is not a symlink.")
+        print("       That is most likely the standalone CLI install. Re-run with")
+        print("       --force to replace it with a link to this binary.")
+        exit(1)
+    }
+
+    do {
+        try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        if present { try fm.removeItem(at: dest) }
+        try fm.createSymbolicLink(at: dest, withDestinationURL: src)
+    } catch {
+        print("error: could not link \(dest.path): \(error)"); exit(1)
+    }
+    print("linked \(dest.path) -> \(src.path)")
+
+    let path = ProcessInfo.processInfo.environment["PATH"] ?? ""
+    if !path.split(separator: ":").contains(where: { String($0) == dir.path }) {
+        print("note: \(dir.path) is not on your PATH — add it to run `micpeg` directly.")
+    }
+}
+
 func cmdInstall() {
+    refuseInsideBundle("install")
     let fm = FileManager.default
 
     // launchd would otherwise crash-loop forever on a path that does not exist while
@@ -1141,6 +1149,7 @@ func cmdInstall() {
 }
 
 func cmdUninstall() {
+    refuseInsideBundle("uninstall")
     let (st, out) = runTool("/bin/launchctl", ["bootout", serviceTarget])
     print(st == 0 ? "booted out \(serviceTarget)"
                   : "note: bootout returned \(st): \(out.trimmingCharacters(in: .whitespacesAndNewlines))")
@@ -1201,8 +1210,10 @@ func usage() {
 
       status      show current state, target and daemon liveness
       list        list input devices with transport type and UID
-      pick        make the current default input the pinned target
+      pick [uid]  pin the given device, or the current default input
       on | off    resume / pause pinning
+      link        put micpeg on your PATH as a link to this binary (--force replaces
+                  an existing file at ~/.local/bin/micpeg)
       install     write config + LaunchAgent and bootstrap the daemon
       uninstall   bootout the daemon and remove its LaunchAgent
       daemon      run in the foreground (used by launchd)
@@ -1215,9 +1226,10 @@ switch CommandLine.arguments.dropFirst().first {
 case "daemon":    cmdDaemon()
 case "status":    cmdStatus()
 case "list":      cmdList()
-case "pick":      cmdPick()
+case "pick":      cmdPick(CommandLine.arguments.dropFirst(2).first)
 case "on":        cmdEnable(true)
 case "off":       cmdEnable(false)
+case "link":      cmdLink(force: CommandLine.arguments.dropFirst(2).contains("--force"))
 case "install":   cmdInstall()
 case "uninstall": cmdUninstall()
 case nil:         cmdStatus()
