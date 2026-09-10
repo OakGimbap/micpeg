@@ -180,3 +180,83 @@ like a healthy one. Provoke an event: unplug and reconnect the mic, or select a 
 in System Settings, and watch `~/Library/Logs/micpeg.log` for a transition line.
 
 24-hour soak: see [`../scripts/leakcheck.sh`](../scripts/leakcheck.sh) for the arming command.
+
+---
+
+## The settings app
+
+Recorded stage by stage as the build order in [`app-design.md`](app-design.md) is worked
+through. Same rule as everything above: measured on this machine, not taken from documentation.
+
+### Stage 1 — the `MicpegAudio` extraction and the three CLI changes
+
+The extraction moves twelve read-only helpers out of `main.swift`. Its risk is not that the
+code stops compiling but that the daemon goes *quiet*: `addr()` now comes from another module,
+and an agent whose listeners never registered is indistinguishable from one with nothing to do.
+So all three listeners were provoked rather than assumed.
+
+| Test | Result |
+|---|---|
+| `micpeg list` and `micpeg status`, before vs. after the extraction | **PASS** — byte-identical |
+| Dynamic dependencies (`otool -L`), before vs. after | **PASS** — unchanged; the library links statically |
+| Universal build and deployment target | **PASS** — x86_64 + arm64, `minos 12.0` unchanged |
+| `'dIn '` liveness — default input moved to the built-in mic | **PASS** → `YIELDED`; `micpeg on` reverted it |
+| `'dev#'` liveness — Bluetooth headset connected | **PASS** — arrival logged, reverted 11 ms later |
+| `'srst'` liveness — `sudo killall coreaudiod` | **PASS** — re-registered in process |
+| `micpeg pick <uid>` round trip against the live daemon | **PASS** — applied in both directions |
+| `pick` refusals: unresolvable UID, two output-only devices | **PASS** — config left untouched |
+| Bundle guard on `install` / `uninstall` | **PASS** — refused from inside a bundle *and* through a PATH symlink |
+| Read-only commands from inside a bundle | **PASS** — `status` and `list` unaffected |
+| `micpeg link`: regular file, `--force`, re-link, dangling link, directory | **PASS** ×5 — a directory is refused even with `--force` |
+| `scripts/invariants.sh` with each violation injected in turn | **PASS** — all four checks fail when they should |
+
+Observations worth keeping:
+
+- The headset published its output and input objects **3 ms apart** here, against ~16 ms
+  measured earlier. Output still came first; the gap is not a constant, which is another reason
+  the classification does not rest on timing.
+- Killing `coreaudiod` produced `PINNED -> ABSENT` for **3.4 s** — while the HAL is down the
+  target genuinely does not resolve — and `'srst'` then recovered it. **The daemon's pid did not
+  change**, so that was in-process recovery, not a launchd relaunch.
+- `micpeg link` replaced the very path launchd runs the agent from, while the agent was running,
+  with no restart and no missed event: the running process holds its inode, and launchd re-reads
+  the path only when it starts the program again.
+
+### Two findings that change the app's design
+
+**1. `Bundle.main` cannot answer "am I inside an app bundle?" once the CLI is on `PATH`.**
+
+| How the helper was run | `Bundle.main.bundlePath` | `Bundle.main.executableURL` |
+|---|---|---|
+| `…/Fake.app/Contents/MacOS/micpeg`, directly | `…/Fake.app` | the helper itself |
+| through a symlink in `~/.local/bin` | **the symlink's directory** | **the symlink** |
+| `…/Fake.app/Contents/Helpers/micpeg`, directly | `…/Contents/Helpers` | the helper itself |
+
+A bundle check that skips symlink resolution therefore misses exactly the case the guard exists
+for — a user with the bundled CLI on their `PATH` running `micpeg install`. Resolving first
+(`resolvingSymlinksInPath()`) gives the real path in every case above, and `_NSGetExecutablePath`
+agreed with `Bundle.main.executableURL` throughout, so no lower-level call is needed.
+
+Note also that `Bundle.main.bundlePath` is the *enclosing* bundle only for a helper in
+`Contents/MacOS`; one in `Contents/Helpers` reports its own directory. Neither is a reliable
+"which app am I in" answer.
+
+**2. `Contents/MacOS/Micpeg` and `Contents/MacOS/micpeg` are one file on a stock Mac.**
+
+The boot volume is case-insensitive APFS, which is the macOS default. Creating both names in one
+directory yields a single entry:
+
+```
+115619559  Contents/MacOS/micpeg
+115619559  Contents/MacOS/Micpeg     ← same inode; the directory holds one file
+```
+
+So the bundle layout in `app-design.md` cannot be assembled as written: whichever executable is
+copied second silently overwrites the first, and the app bundle ends up with the wrong program
+as its main executable. The names have to differ by more than case. Not yet decided — it belongs
+to stage 2.
+
+**Not tested, and still open:** `HOME` cannot be used to redirect the CLI's paths for testing —
+`NSHomeDirectory()` resolves through `getpwuid`, so `~/.config/micpeg` and `~/.local/bin` always
+mean the real ones. Any future test that writes there has to back up and restore instead.
+
