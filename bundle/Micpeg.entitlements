@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- The hardened runtime requires this even outside the sandbox. Without it the TCC
+         prompt never appears and capture silently yields nothing — the same shape of
+         failure as a dead HAL listener. scripts/bundle.sh asserts it is present on the app.
+         It is applied to the app only. The daemon is signed without it, which is a stronger
+         statement of "the background agent never opens the microphone" than the AVFoundation
+         grep alone: the agent is not merely written without capture code, it is not
+         permitted to capture. -->
+    <key>com.apple.security.device.audio-input</key> <true/>
+</dict>
+</plist>

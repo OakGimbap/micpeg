@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- CFBundleExecutable is MicpegApp, not Micpeg, because Contents/MacOS also holds the
+         daemon+CLI as `micpeg`, and APFS is case-insensitive by default: MacOS/Micpeg and
+         MacOS/micpeg are one file, and the second copy silently replaces the first
+         (measured — docs/verification.md). Renaming the app side rather than the daemon
+         side keeps `ps` and Activity Monitor showing `micpeg` for the background process,
+         while the app's visible name comes from CFBundleName either way. -->
+    <key>CFBundleExecutable</key>            <string>MicpegApp</string>
+    <key>CFBundleIdentifier</key>            <string>com.micpeg.app</string>
+    <key>CFBundleName</key>                  <string>Micpeg</string>
+    <key>CFBundlePackageType</key>           <string>APPL</string>
+    <key>CFBundleShortVersionString</key>    <string>0.1.0</string>
+    <key>CFBundleVersion</key>               <string>1</string>
+    <key>CFBundleInfoDictionaryVersion</key> <string>6.0</string>
+
+    <!-- docs/app-design.md, "Deployment target": @Observable is macOS 14. -->
+    <key>LSMinimumSystemVersion</key>        <string>14.0</string>
+    <key>NSHighResolutionCapable</key>       <true/>
+
+    <!-- LSUIElement is deliberately absent: a Dock icon is wanted. The app is not a menu
+         bar item, and closing its window must not look like it stopped the feature. -->
+
+    <!-- Shown in the TCC prompt. The app opens the microphone only during the input test
+         (stage 4). Absent, the app is killed on first capture. -->
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Micpeg opens the microphone only while you run the input test, so you can hear and see that the pinned microphone is the one actually recording.</string>
+</dict>
+</plist>

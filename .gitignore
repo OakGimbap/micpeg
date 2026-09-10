@@ -9,3 +9,6 @@
 
 # Soak-test output — contains local device names
 leakcheck-result*.txt
+
+# Bundle output
+build/

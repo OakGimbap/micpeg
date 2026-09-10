@@ -22,10 +22,11 @@ touching the app.
   are wanted, but no `.xcodeproj` enters the repo.
 - The daemon links CoreAudio + Foundation only. No third-party dependencies anywhere.
 - Distribution is a single notarized `Micpeg.app` containing both executables.
-- Minimum macOS 14 once the app target lands. SwiftPM's `platforms:` is package-wide, so the
-  daemon inherits it; `@Observable` is the reason it is 14 and not 13. Until then the package
-  still declares macOS 12, so stage 1 does not make README's version claim false on its own.
-  See `docs/app-design.md`.
+- Minimum macOS 14, in effect since the app target landed. SwiftPM's `platforms:` is
+  package-wide, so the daemon inherits it; `@Observable` is the reason it is 14 and not 13.
+  `swift-tools-version` is 5.9 because `.macOS(.v14)` does not exist before it. **This makes
+  README's "macOS 12 (Monterey) or later" false**, including for the source build in
+  `scripts/install.sh` — the README fix is stage 5. See `docs/app-design.md`.
 - Verified on real hardware only on macOS 26.
 
 ## Architecture principles
@@ -99,10 +100,11 @@ Targets marked `(planned)` do not exist yet — see the build order at the end o
 Sources/MicpegAudio/       # read-only CoreAudio helpers, shared. No writes.
 Sources/micpeg/main.swift  # daemon + CLI. Owns the only setDefaultInputDevice call.
 Sources/MicpegUI/          # (planned) SwiftUI views (library target, so previews work)
-Sources/MicpegApp/         # (planned) @main, wiring, migration. Thin.
+Sources/MicpegApp/         # @main, wiring, migration. Thin. Stage 2 is a test harness.
+bundle/                    # Info.plist, agent plist, entitlements — inputs to bundle.sh
 scripts/install.sh         # source build + install, for developers
 scripts/invariants.sh      # the structural greps above; CI runs it
-scripts/bundle.sh          # (planned) assemble Micpeg.app, sign, notarize
+scripts/bundle.sh          # assemble Micpeg.app, sign, check. Notarization is stage 5
 scripts/leakcheck.sh       # 24h soak test (writes a gitignored result file)
 docs/design.md             # daemon architecture + the three CoreAudio traps
 docs/app-design.md         # app architecture, bundle, SMAppService, invariants
@@ -126,7 +128,18 @@ micpeg status
 tail -f ~/Library/Logs/micpeg.log
 launchctl print gui/$(id -u)/com.micpeg.agent       # what launchd actually resolved
 launchctl kill SIGHUP gui/$(id -u)/com.micpeg.agent # reload config
+/Applications/Micpeg.app/Contents/MacOS/MicpegApp status   # what SMAppService thinks
 ```
+
+Those two are the diagnostic pair, and they disagree in useful ways: `launchctl print` has
+shown a job still `running` after ServiceManagement had dropped every record of it, and only
+`MicpegApp status` reported the truth (`notFound`).
+
+**Do not reach for `sfltool dumpbtm` casually.** It requests `system.privilege.admin` and the
+credential is not cached, so every single invocation raises a password dialog — 26 of them in
+one session while stage 2 was being worked out. Use it only when the Background Task Management
+record's own contents are the question. Nothing micpeg ships ever asks for an administrator
+password; registering a LaunchAgent is a per-user operation.
 
 **Testing rule: an idle daemon with dead listeners is indistinguishable from a healthy one.**
 Never conclude a change is safe from a quiet log. Provoke real events — connect the headset,
@@ -137,6 +150,11 @@ that reports success but resolves nothing, a `state.json` watcher that dies on t
 write, an `AVAudioEngine` that stops delivering after a device change, and a missing
 `com.apple.security.device.audio-input` entitlement that suppresses the permission prompt
 entirely. Test `SMAppService` from `/Applications`, not from a build directory.
+
+The first of those is no longer hypothetical. With a legacy agent holding the label,
+`register()` returns without throwing and records **nothing**, and `status` returns `.enabled`
+about the legacy agent. **Never treat `SMAppService.status` as evidence that the agent is
+running.** The check that means something is `state.json`'s `updated` timestamp moving.
 
 `docs/app-design.md` ends with a list of assumptions that are documented but **not yet observed
 on hardware**. Confirm them before building on them, and record results in
