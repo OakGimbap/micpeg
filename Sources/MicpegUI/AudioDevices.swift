@@ -24,17 +24,24 @@ public struct AudioDevice: Identifiable, Equatable, Sendable {
     public var id: AudioDeviceID
     public var uid: String?
     public var name: String
-    /// The four-character transport code as the CLI prints it: `usb `, `bltn`, `blue`.
+    /// The raw CoreAudio transport type. Kept alongside the display string so comparisons are
+    /// integer ones: the first draft compared four-character *strings* — including a literal
+    /// `"bltn"` written out by hand in AppModel — which rebuilt a `[UInt8]` and a `String` for
+    /// every device on every redraw, and put the one hand-typed transport code in the project
+    /// somewhere the compiler could not check it.
+    public var transportCode: UInt32
+    /// The same code as the CLI prints it: `usb `, `bltn`, `blue`. Display only.
     public var transport: String
-    public var hasInput: Bool
 
-    public init(id: AudioDeviceID, uid: String?, name: String, transport: String, hasInput: Bool) {
+    public init(id: AudioDeviceID, uid: String?, name: String, transportCode: UInt32) {
         self.id = id
         self.uid = uid
         self.name = name
-        self.transport = transport
-        self.hasInput = hasInput
+        self.transportCode = transportCode
+        self.transport = fourCC(transportCode)
     }
+
+    public var isBuiltIn: Bool { transportCode == kAudioDeviceTransportTypeBuiltIn }
 }
 
 public enum AudioSnapshot {
@@ -50,27 +57,26 @@ public enum AudioSnapshot {
     /// trade for a window whose audience is "my AirPods keep stealing my microphone", and it
     /// is not a dead end: `micpeg list` still shows them and `micpeg pick <uid>` still pins
     /// one, so the pro-audio case has a route that the ordinary case cannot stumble into.
-    static let aggregateTransport = fourCC(kAudioDeviceTransportTypeAggregate)
+
+    /// One device, read once. Every property this needs comes from `MicpegAudio`; the point of
+    /// having it in one place is that the three callers below cannot drift, and that
+    /// `transportType` is asked for once rather than once to filter and again to store.
+    static func device(_ id: AudioDeviceID) -> AudioDevice {
+        AudioDevice(id: id, uid: deviceUID(id), name: deviceName(id),
+                    transportCode: transportType(id))
+    }
 
     /// Every device that publishes an input scope and is something a person could mean by
     /// "my microphone", in the order CoreAudio reports them.
     public static func inputDevices() -> [AudioDevice] {
-        allDevices().compactMap { id in
-            guard hasInput(id) else { return nil }
-            guard fourCC(transportType(id)) != aggregateTransport else { return nil }
-            return AudioDevice(id: id,
-                               uid: deviceUID(id),
-                               name: deviceName(id),
-                               transport: fourCC(transportType(id)),
-                               hasInput: true)
-        }
+        allDevices()
+            .filter { hasInput($0) }
+            .map(device(_:))
+            .filter { $0.transportCode != kAudioDeviceTransportTypeAggregate }
     }
 
     public static func currentInput() -> AudioDevice? {
-        defaultInputDevice().map {
-            AudioDevice(id: $0, uid: deviceUID($0), name: deviceName($0),
-                        transport: fourCC(transportType($0)), hasInput: hasInput($0))
-        }
+        defaultInputDevice().map(device(_:))
     }
 
     /// Displayed, never touched. See the header, and the invariant that depends on this call
@@ -81,19 +87,13 @@ public enum AudioSnapshot {
         var size = UInt32(MemoryLayout<AudioDeviceID>.size)
         let status = AudioObjectGetPropertyData(systemObject, &a, 0, nil, &size, &id)
         guard status == noErr, id != 0 else { return nil }
-        return AudioDevice(id: id, uid: deviceUID(id), name: deviceName(id),
-                           transport: fourCC(transportType(id)), hasInput: hasInput(id))
+        return device(id)
     }
 
-    /// Whether a device sits on a transport the daemon is configured to refuse. Pinning one
-    /// produces an agent that can never act — the CLI warns about it in
-    /// `warnIfTargetIsBlocked()`, and app-ui.md requires the window to match that behaviour
-    /// rather than silently accept the choice.
-    public static func isBlocked(_ device: AudioDevice, by blocked: [String]) -> Bool {
-        blocked.contains { name in
-            guard let code = transportCode(name) else { return false }
-            return fourCC(code) == device.transport
-        }
+    /// The transport codes a set of configured names refers to, resolved once when the config
+    /// is read rather than per device per redraw.
+    public static func transportCodes(named names: [String]) -> Set<UInt32> {
+        Set(names.compactMap(transportCode(_:)))
     }
 }
 
@@ -103,13 +103,14 @@ public enum AudioSnapshot {
 /// form takes a dispatch queue, so the callback arrives somewhere known instead of on whatever
 /// thread the HAL happens to use.
 public final class DeviceWatch {
-    private let onChange: @MainActor () -> Void
     private let queue = DispatchQueue(label: "com.micpeg.app.devices")
     private var installed: [(AudioObjectPropertyAddress, AudioObjectPropertyListenerBlock)] = []
-    private var coalesce: DispatchWorkItem?
+    private let coalescer: Coalescer
 
     public init(onChange: @escaping @MainActor () -> Void) {
-        self.onChange = onChange
+        self.coalescer = Coalescer(delay: DaemonTiming.coalesce,
+                                   queue: DispatchQueue(label: "com.micpeg.app.devices.coalesce"),
+                                   onFire: onChange)
         // dev# — devices appearing and disappearing.
         // dIn  — the default input moving, which is the event the whole program exists for.
         // dOut — the default output moving, which the window displays.
@@ -121,6 +122,7 @@ public final class DeviceWatch {
     }
 
     deinit {
+        coalescer.cancel()
         for (address, block) in installed {
             var a = address
             AudioObjectRemovePropertyListenerBlock(systemObject, &a, queue, block)
@@ -129,7 +131,7 @@ public final class DeviceWatch {
 
     private func install(_ address: AudioObjectPropertyAddress) {
         var a = address
-        let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in self?.fire() }
+        let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in self?.coalescer.schedule() }
         let status = AudioObjectAddPropertyListenerBlock(systemObject, &a, queue, block)
         // A listener that failed to install is the exact shape of this project's favourite
         // silent failure: the window would simply stop updating, with nothing to read.
@@ -142,12 +144,4 @@ public final class DeviceWatch {
 
     /// One redraw per burst. A revert moves the default input twice, roughly 400 ms apart —
     /// the daemon's 300 ms debounce plus its re-verify — and the window should settle once.
-    private func fire() {
-        coalesce?.cancel()
-        let work = DispatchWorkItem { [onChange] in
-            Task { @MainActor in onChange() }
-        }
-        coalesce = work
-        queue.asyncAfter(deadline: .now() + 0.5, execute: work)
-    }
 }

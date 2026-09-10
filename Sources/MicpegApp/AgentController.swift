@@ -29,39 +29,27 @@
 import Foundation
 import ServiceManagement
 
-@MainActor
-@Observable
-final class AgentController {
+/// Not a controller any more: a namespace.
+///
+/// It had an instance side — an `@Observable` transcript of every registration operation —
+/// built for the stage 2 harness window's "Copy transcript" button. Stage 4 deleted that
+/// window and the transcript became write-only: an `App`-level `@State` object SwiftUI
+/// observed, accumulating evidence with no way to read it back. Evidence with no retrieval
+/// path is not evidence, so the operations now report to stderr, where `log show --predicate
+/// 'process == "MicpegApp"'` can find them even for a copy launched from the Finder.
+enum AgentController {
     /// The file name inside Contents/Library/LaunchAgents. The label inside that plist stays
     /// `com.micpeg.agent` on purpose — see docs/app-design.md, "The label stays".
-    nonisolated static let plistName = "com.micpeg.agent.plist"
+    static let plistName = "com.micpeg.agent.plist"
 
-    struct Entry: Identifiable {
-        let id = UUID()
-        let at = Date()
-        let text: String
-    }
-
-    private let service = SMAppService.agent(plistName: AgentController.plistName)
-
-    /// Everything this app has done to the registration in this session, and what came back.
-    /// Kept because "register() returned without throwing" is not evidence of anything — the
-    /// transcript is what a bug report needs and what the log would otherwise have to carry.
-    private(set) var transcript: [Entry] = []
-
-    init() {
-        note("launched: status = \(Self.describe(service.status))")
-        note("bundle: \(Bundle.main.bundleURL.path)")
-        note("BundleProgram target: \(Self.bundleProgramReport())")
-    }
-
-    // MARK: - Operations
-
-    /// Record what a migration or repair actually did. The window shows a one-line verdict;
-    /// this keeps the evidence behind it.
-    func absorb(_ outcome: Migration.Outcome, label: String) {
-        note("\(label): \(outcome.ok ? "reached a healthy state" : "DID NOT reach a healthy state")")
-        outcome.lines.forEach { note("  " + $0) }
+    /// What a migration or repair actually did. The window shows a one-line verdict; this is
+    /// the evidence behind it, and the reason it goes to stderr rather than into memory is
+    /// above.
+    static func report(_ outcome: Migration.Outcome, label: String) {
+        var text = "\(label): "
+            + (outcome.ok ? "reached a healthy state" : "DID NOT reach a healthy state") + "\n"
+        for line in outcome.lines { text += "  " + line + "\n" }
+        FileHandle.standardError.write(Data(text.utf8))
     }
 
     /// The only correct response to `.requiresApproval`. Measured in stage 2: `register()`
@@ -69,28 +57,13 @@ final class AgentController {
     /// back, so nothing the app can call will undo it. Taking the user to the switch is the
     /// whole remedy — and telling them to "go to System Settings" without taking them there is
     /// where this flow usually dies.
-    func openLoginItems() {
-        note("openSystemSettingsLoginItems()")
+    static func openLoginItems() {
         SMAppService.openSystemSettingsLoginItems()
     }
 
-    func copyTranscript() -> String {
-        transcript.map { "\(Self.stamp.string(from: $0.at))  \($0.text)" }.joined(separator: "\n")
-    }
-
-    private func note(_ text: String) {
-        transcript.append(Entry(text: text))
-    }
-
-    private static let stamp: DateFormatter = {
-        let f = DateFormatter()
-        f.dateFormat = "HH:mm:ss.SSS"
-        return f
-    }()
-
     // MARK: - Reporting
 
-    nonisolated static func describe(_ status: SMAppService.Status) -> String {
+    static func describe(_ status: SMAppService.Status) -> String {
         switch status {
         case .notRegistered:     return "notRegistered"
         case .enabled:           return "enabled"
@@ -103,7 +76,7 @@ final class AgentController {
     /// Print the error whole. The domain ServiceManagement uses has moved across releases
     /// (SMAppServiceErrorDomain is macOS 15+), so the domain string is evidence, not noise,
     /// and the numeric code is matched against SMErrors.h separately rather than assumed.
-    nonisolated static func describe(_ error: Error) -> String {
+    static func describe(_ error: Error) -> String {
         let ns = error as NSError
         var text = "domain=\(ns.domain) code=\(ns.code)"
         if let name = smErrorName(ns.code) {
@@ -117,7 +90,7 @@ final class AgentController {
     }
 
     /// SMErrors.h, in order from kSMErrorInternalFailure = 2.
-    nonisolated private static func smErrorName(_ code: Int) -> String? {
+    private static func smErrorName(_ code: Int) -> String? {
         let names = ["kSMErrorInternalFailure", "kSMErrorInvalidSignature",
                      "kSMErrorAuthorizationFailure", "kSMErrorToolNotValid",
                      "kSMErrorJobNotFound", "kSMErrorServiceUnavailable",
@@ -131,7 +104,7 @@ final class AgentController {
     /// Whether the executable BundleProgram names is actually there. A missing one is the
     /// failure the case-insensitive-filesystem collision would have produced: the bundle
     /// looks assembled, registration succeeds, and launchd has nothing to exec.
-    nonisolated static func bundleProgramReport() -> String {
+    static func bundleProgramReport() -> String {
         let plist = Bundle.main.bundleURL
             .appendingPathComponent("Contents/Library/LaunchAgents")
             .appendingPathComponent(plistName)

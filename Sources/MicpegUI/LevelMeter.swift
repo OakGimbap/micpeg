@@ -10,6 +10,11 @@
 // It is also decorative. Assistive technology gets nothing from a moving bar, so the meter is
 // hidden from it and the adjacent sentence carries the information instead. That is the reason
 // the silence hint is a sentence rather than the bar turning a colour.
+//
+// The values arrive already scaled: `InputTest` converts RMS to a bar height once per sample,
+// where the same number also decides whether the window says no sound is arriving. Doing it
+// here instead meant a `log10f` per bar per frame — 1920 a second — and two constants that
+// could disagree about where silence is.
 
 import SwiftUI
 
@@ -27,46 +32,36 @@ public struct LevelMeter: View {
                 with: .color(.secondary.opacity(0.15)))
 
             guard test.isRunning else { return }
+            let levels = test.levels
+            guard !levels.isEmpty else { return }
 
             if reduceMotion {
                 // A single bar at the current level. No scrolling history to follow.
-                let level = CGFloat(normalize(test.levels.last ?? 0))
-                let filled = CGRect(x: 0, y: 0, width: size.width * level, height: size.height)
+                let filled = CGRect(x: 0, y: 0,
+                                    width: size.width * CGFloat(levels[levels.count - 1]),
+                                    height: size.height)
                 context.fill(Path(roundedRect: filled, cornerRadius: radius), with: .style(.tint))
                 return
             }
 
-            let count = test.levels.count
-            guard count > 0 else { return }
-            let slot = size.width / CGFloat(count)
+            // One Path and one fill for the whole meter rather than 64 of each, 30 times a
+            // second.
+            let slot = size.width / CGFloat(levels.count)
             let barWidth = max(1, slot - 1)
-            for (index, value) in test.levels.enumerated() {
-                let height = max(1, size.height * CGFloat(normalize(value)))
-                let rect = CGRect(x: CGFloat(index) * slot,
-                                  y: (size.height - height) / 2,
-                                  width: barWidth,
-                                  height: height)
-                context.fill(Path(roundedRect: rect, cornerRadius: barWidth / 2),
-                             with: .style(.tint))
+            let corner = CGSize(width: barWidth / 2, height: barWidth / 2)
+            var bars = Path()
+            for (index, level) in levels.enumerated() {
+                let height = max(1, size.height * CGFloat(level))
+                bars.addRoundedRect(in: CGRect(x: CGFloat(index) * slot,
+                                               y: (size.height - height) / 2,
+                                               width: barWidth,
+                                               height: height),
+                                    cornerSize: corner)
             }
+            context.fill(bars, with: .style(.tint))
         }
         .frame(height: 28)
         // Decorative: the sentence beside it says everything this shows.
         .accessibilityHidden(true)
-    }
-
-    /// RMS is tiny for ordinary sound — measured on this hardware, a quiet room reads 0.0017
-    /// and speech an order of magnitude more — so a linear bar would sit flat against the
-    /// bottom and read as "nothing is reaching the microphone", the exact wrong answer for a
-    /// test whose job is to tell that case apart from a working one.
-    ///
-    /// A cube root was the first attempt and put a silent room a fifth of the way up the bar.
-    /// This is the ordinary decibel mapping with a -60 dBFS floor instead: room noise lands
-    /// near the bottom where it belongs, speech occupies the middle, and the curve is one
-    /// anybody who has seen an audio meter already knows how to read.
-    private func normalize(_ rms: Float) -> Float {
-        guard rms > 0 else { return 0 }
-        let db = 20 * log10f(min(max(rms, 1e-7), 1))
-        return min(1, max(0, (db + 60) / 60))
     }
 }

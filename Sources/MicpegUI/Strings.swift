@@ -47,6 +47,8 @@ public enum Copy {
     }
     public static let pausedSummary = "Micpeg is paused. Your microphone can change freely."
     public static let unconfiguredSummary = "No microphone is chosen yet."
+    public static let settingsUnreadableSummary =
+        "Micpeg is still using the settings it loaded last."
 
     // MARK: Banners
 
@@ -69,6 +71,12 @@ public enum Copy {
         "It was installed from the command line and needs to be replaced before this app can "
         + "take over."
     public static let legacyAction = "Replace It"
+
+    public static let otherCopyTitle = "Another copy of Micpeg is doing this"
+    public static func otherCopyBody(_ path: String) -> String {
+        "The copy at \(path) set up the background helper and it's running. Use that one, or "
+        + "delete it and reopen this one."
+    }
 
     public static func movedBody(_ from: String) -> String {
         "Micpeg was moved from \(from). Its background helper has been reconnected."
@@ -108,7 +116,6 @@ public enum Copy {
     public static let silenceHintBuiltIn =
         "If the lid is closed, the built-in microphone isn't available. Otherwise check the "
         + "input volume in System Settings."
-    public static let meterAccessibilityHidden = ""
 
     // MARK: Activity
 
@@ -128,5 +135,34 @@ public enum Copy {
     public static let targetMissingActivity = "Your chosen microphone isn't connected."
     public static let backedOffActivity =
         "Stopped competing with another program over the microphone."
-    public static let startedActivity = "The background helper started."
+
+    /// The daemon's failures, in the user's terms. `OSStatus` values and four-character codes
+    /// stay in `Activity.raw` — app-ui.md keeps them out of the window.
+    public static func problem(_ problem: Activity.Problem) -> String {
+        switch problem {
+        case .restoreFailed:
+            return "Tried to switch your microphone back and couldn't."
+        case .audioSystemLost:
+            return "Lost track of the audio system and restarted."
+        case .statusNotSaved:
+            return "Couldn't save its status, so what's shown here may be out of date."
+        case .settingsUnreadable:
+            return "Couldn't read its settings and is using the last ones that worked."
+        }
+    }
+
+    // MARK: Failures the window has to surface
+
+    /// These four are shown to the user, so they belong here rather than inline in the model
+    /// and the audio code — the point of this file is that a translation can start and finish
+    /// in it.
+    public static let microphonePermissionDenied =
+        "Micpeg needs permission to use the microphone. Allow it in System Settings > "
+        + "Privacy & Security > Microphone."
+    public static let microphoneNoChannels =
+        "This microphone isn't providing any audio channels right now."
+    public static func microphoneCouldNotOpen(_ reason: String) -> String {
+        "The microphone could not be opened: \(reason)"
+    }
+    public static let deviceHasNoIdentifier = "That device has no identifier to pin."
 }

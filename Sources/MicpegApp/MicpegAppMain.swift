@@ -14,7 +14,6 @@ import SwiftUI
 @main
 struct MicpegSettingsApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
-    @State private var agent = AgentController()
     @State private var model = AppModel()
 
     init() {
@@ -54,7 +53,7 @@ struct MicpegSettingsApp: App {
         let survey = InstallSurvey.take()
         if case .moved(let from) = survey.verdict {
             let outcome = await Task.detached { Migration.repair() }.value
-            agent.absorb(outcome, label: "auto-repair after a move")
+            AgentController.report(outcome, label: "auto-repair after a move")
             model.setAgent(outcome.ok ? .repairedAfterMove(from: from)
                                       : condition(for: outcome.survey))
         } else {
@@ -69,11 +68,16 @@ struct MicpegSettingsApp: App {
         case .healthy:          return .healthy
         case .requiresApproval: return .needsApproval
         case .legacyPresent:    return .legacyPresent
-        case .notRegistered:    return .notRegistered
-        // Both mean "nothing from this bundle is running the label right now", which is the
-        // same sentence to the user and the same repair.
-        case .stale, .foreignBundle, .moved:
-            return .notRunning
+        // The daemon is running, just not this bundle's. Kept separate because the sentence
+        // and the remedy are both different: nothing here is broken, there are simply two
+        // copies of the app and the other one got there first.
+        case .foreignBundle(let running):
+            return .otherCopyRunning(at: running.deletingLastPathComponent()
+                .deletingLastPathComponent().deletingLastPathComponent().path)
+        // These three mean nothing is keeping the microphone: one sentence, one repair.
+        // `.moved` reaches here only if the automatic repair above failed.
+        case .notRegistered, .stale, .moved:
+            return .notKeeping
         }
     }
 
@@ -81,7 +85,7 @@ struct MicpegSettingsApp: App {
     private func handle(_ action: AppModel.Banner.Action) {
         switch action {
         case .openLoginItems:
-            agent.openLoginItems()
+            AgentController.openLoginItems()
         case .repairAgent:
             run { Migration.repair() }
         case .migrateLegacy:
@@ -101,7 +105,7 @@ struct MicpegSettingsApp: App {
     private func run(_ body: @escaping @Sendable () -> Migration.Outcome) {
         Task {
             let outcome = await Task.detached(priority: .userInitiated) { body() }.value
-            agent.absorb(outcome, label: "window action")
+            AgentController.report(outcome, label: "window action")
             model.setAgent(condition(for: outcome.survey))
             model.reloadAll()
         }

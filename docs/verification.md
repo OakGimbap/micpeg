@@ -980,3 +980,47 @@ search results for margins and spacing are all pre-2022 HIG numbers and were not
 exposure is contained by app-ui.md's own instruction — "Let `Form` supply the inner rhythm; do
 not add manual padding between its rows" — which is followed literally: the window sets one
 width and no margins or inter-row spacing anywhere.
+
+#### 20. What a cleanup review found afterwards
+
+Four of these were behavioural, not tidiness.
+
+**The window could not report a failure.** `ActivityLog` classified log lines by matching a
+list of hopeful prefixes, and the daemon's `REVERT FAILED`, `RE-VERIFY FAILED`, `FATAL:` and
+two `WARNING:` lines matched none of them. Every one was dropped in silence, so the single most
+important thing that can happen — micpeg tried to put the microphone back and could not — left
+no trace in the feature built to report it. The parser now reads the log's grammar
+(`<FROM> -> <TO>: <reason>`, with both sides resolved against `DaemonState.Kind`) and puts
+everything that is not a transition into an explicit bucket. Measured against the real log and
+against synthesised failure lines: 980 lines → 77 events, and all five failure shapes now
+classify.
+
+**A corrupt settings file showed the onboarding screen.** `PinnedConfig.ReadResult` exists to
+separate "no file" from "a file that does not parse" — its own comment says the window "must
+not offer to set things up as if nothing were there" — and the window then flattened both to
+"unconfigured" and offered exactly that. `.settingsUnreadable` is now its own body state.
+
+**The window told a user their microphone was not being kept before they had chosen one.** The
+suppression was a guard bolted onto one condition; the other three leaked. It is now one rule
+applied once.
+
+**"The background helper isn't running" was said about a helper that was running.**
+`.foreignBundle` — another copy of Micpeg holding the label — was folded in with the genuinely
+broken states, so the window claimed nothing was running and offered a Reconnect button that
+would have started a fight between two copies of the same app. It has its own condition and
+says where the other copy is.
+
+Three smaller things were measured rather than argued: a `DispatchSource` on `state.json`'s own
+descriptor is deaf after one write (already known, now shared through one `Coalescer` instead
+of two copies); the window's three debounce delays each re-derived the same measured fact and
+one of them, at 0.15 s, could not merge the 400 ms pair its comment said it existed to merge;
+and `MicpegApp meter` and the window's meter ran two separate copies of the AVAudioEngine
+setup, which made "the diagnostic exercises the same tap" a promise rather than a fact. All
+three now come from one place.
+
+**A note on a false alarm.** During this pass the app appeared to launch with no window and
+spin at 38% CPU. The committed build did the same, which is what identified it: the screen was
+locked (`CGSSessionScreenIsLocked = Yes`), and a locked session does not realise a new app's
+windows. Nothing was wrong with the code. The window's appearance has not been re-checked on
+screen since the cleanup for that reason; everything reachable without a window — the parser
+against the real log, `survey`, `meter`, the invariants, the daemon still pinning — has.
