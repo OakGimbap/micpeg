@@ -28,14 +28,14 @@ system-wide. `phys_footprint` is the honest number.
 
 ### The idle-wakeups measurement, and how it was first read wrong
 
-`sudo powermetrics --samplers tasks -n 3 -i 5000` never listed micpin at all — the task sampler
+`sudo powermetrics --samplers tasks -n 3 -i 5000` never listed micpeg at all — the task sampler
 only reports the busiest processes, so this is evidence of absence, not a number. The counter
 was read directly instead:
 
 ```
 $ top -l 2 -s 5 -pid <PID> -stats pid,command,cpu,time,idlew
 PID    COMMAND %CPU TIME     IDLEW
-19340  micpin  0.0  00:00.10 0
+19340  micpeg  0.0  00:00.10 0
 ```
 
 **`IDLEW` is a lifetime counter, not a per-sample rate.** Reading it as a rate produced a bogus
@@ -76,7 +76,7 @@ clue: continuous from 01:00–09:00 (319/hour), zero at 13:00, intermittent othe
 while the machine is idle, not while it is in use. Most likely the display cycling through
 low-power states re-registers its audio endpoint. Not proven.
 
-**Side effect worth knowing:** micpin now ignores such devices entirely, so flapping no longer
+**Side effect worth knowing:** micpeg now ignores such devices entirely, so flapping no longer
 appears in the log at all. It shows up only indirectly, in CPU time.
 
 ---
@@ -94,7 +94,7 @@ appears in the log at all. It shows up only indirectly, in CPU time.
 | Target unplugged → no intervention at all | **PASS** — 0 reverts across an 8 s absence |
 | Target replugged (`AudioObjectID` changes) | **PASS** — UID targeting, no ID cache |
 | `'dIn '` / `'dev#'` listener liveness | **PASS** |
-| `micpin on` / `off` / SIGHUP reload | **PASS** |
+| `micpeg on` / `off` / SIGHUP reload | **PASS** |
 | launchd `ThrottleInterval` on repeated crash | **PASS** — ~50 s restart delay |
 | Malformed config → CLI refuses, file preserved, daemon keeps last good settings | **PASS** |
 | Out-of-range timing values (`1e300`, `-1`, `0`) | **PASS** — clamped, adjustments logged |
@@ -155,8 +155,8 @@ after deployment).
 
 **Practical impact is limited but real.** `cpal` resolves the device when push-to-talk is
 pressed, so a gap with no recording in it costs nothing. The failure mode is *the first
-recording after such a gap*. `micpin status` detects it — `state: PINNED` with a `default input`
-that is not the target — and `micpin on` fixes it immediately.
+recording after such a gap*. `micpeg status` detects it — `state: PINNED` with a `default input`
+that is not the target — and `micpeg on` fixes it immediately.
 
 The soak script now fails on exactly that mismatch. A once-daily sample is a weak net for a
 1.5-hour event, but it costs nothing.
@@ -166,17 +166,17 @@ The soak script now fails on exactly that mismatch. A once-daily sample is a wea
 ## Reproducing these checks
 
 ```sh
-L="gui/$(id -u)/com.micpin.agent"
+L="gui/$(id -u)/com.micpeg.agent"
 P=$(launchctl print "$L" | awk '/pid = /{print $3; exit}')
 
 footprint -p "$P" | tail -3                       # phys_footprint
 vmmap -summary "$P" | grep -E "Physical footprint|Writable regions"
 top -l 2 -s 5 -pid "$P" -stats pid,command,cpu,time,idlew   # idle wakeups (2nd sample)
-sudo fs_usage -w -f filesys | grep micpin         # expect zero syscalls while idle
+sudo fs_usage -w -f filesys | grep micpeg         # expect zero syscalls while idle
 ```
 
 Listener liveness cannot be checked at rest — an idle daemon with dead listeners looks exactly
 like a healthy one. Provoke an event: unplug and reconnect the mic, or select a different input
-in System Settings, and watch `~/Library/Logs/micpin.log` for a transition line.
+in System Settings, and watch `~/Library/Logs/micpeg.log` for a transition line.
 
 24-hour soak: see [`../scripts/leakcheck.sh`](../scripts/leakcheck.sh) for the arming command.

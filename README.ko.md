@@ -1,4 +1,4 @@
-# micpin
+# micpeg
 
 **AirPods를 연결해도 USB 마이크가 macOS 기본 입력으로 남아 있게 합니다.**
 
@@ -20,7 +20,7 @@ Claude Code의 voice mode가 그렇습니다 — push-to-talk을 누르는 그 �
 `com.apple.audio.AudioMIDISetup`은 preference 도메인 자체가 존재하지 않고,
 `defaults domains` 전수 조사에도 억제 키가 없습니다.
 
-## micpin이 하는 일
+## micpeg이 하는 일
 
 CoreAudio의 기본 입력 속성을 감시하다가 macOS가 그것을 블루투스 장치로 넘기면 되돌리는
 약 4MB짜리 launchd 에이전트입니다.
@@ -49,21 +49,21 @@ CoreAudio의 기본 입력 속성을 감시하다가 macOS가 그것을 블루�
 고정하려는 마이크를 연결하고 기본 입력으로 선택한 다음:
 
 ```sh
-git clone https://github.com/OakGimbap/micpin.git
-cd micpin
+git clone https://github.com/OakGimbap/micpeg.git
+cd micpeg
 ./scripts/install.sh
 ```
 
-빌드 → `~/.local/bin/micpin` 복사 → `~/Library/LaunchAgents/com.micpin.agent.plist` 작성 →
+빌드 → `~/.local/bin/micpeg` 복사 → `~/Library/LaunchAgents/com.micpeg.agent.plist` 작성 →
 **현재** 기본 입력으로 설정 초기화 → 에이전트 시작까지 한 번에 합니다. `sudo`가 필요 없습니다 —
 전부 홈 디렉터리 안에서 끝납니다.
 
-유니버설(Apple Silicon + Intel) 바이너리: `MICPIN_UNIVERSAL=1 ./scripts/install.sh`
+유니버설(Apple Silicon + Intel) 바이너리: `MICPEG_UNIVERSAL=1 ./scripts/install.sh`
 
 `~/.local/bin`이 `PATH`에 있는지 확인한 뒤:
 
 ```sh
-micpin status
+micpeg status
 ```
 
 ```
@@ -89,34 +89,34 @@ git pull
 
 | 명령 | 동작 |
 |---|---|
-| `micpin status` | 현재 상태, 고정 대상, 실제 기본 입력, 데몬 생존 여부 |
-| `micpin list` | 입력 장치 전체를 transport type·UID와 함께 나열 |
-| `micpin pick` | 현재 기본 입력을 고정 대상으로 지정 |
-| `micpin on` / `off` | 고정 재개 / 일시 중지 (yield도 함께 해제) |
-| `micpin install` | 설정 + LaunchAgent 작성 후 에이전트 부트스트랩 |
-| `micpin uninstall` | 에이전트 bootout + LaunchAgent 제거 |
-| `micpin daemon` | 포그라운드 실행 (launchd 전용) |
+| `micpeg status` | 현재 상태, 고정 대상, 실제 기본 입력, 데몬 생존 여부 |
+| `micpeg list` | 입력 장치 전체를 transport type·UID와 함께 나열 |
+| `micpeg pick` | 현재 기본 입력을 고정 대상으로 지정 |
+| `micpeg on` / `off` | 고정 재개 / 일시 중지 (yield도 함께 해제) |
+| `micpeg install` | 설정 + LaunchAgent 작성 후 에이전트 부트스트랩 |
+| `micpeg uninstall` | 에이전트 bootout + LaunchAgent 제거 |
+| `micpeg daemon` | 포그라운드 실행 (launchd 전용) |
 
-고정 대상을 바꾸려면 시스템 설정에서 그 마이크를 고른 뒤 `micpin pick`을 실행하세요.
+고정 대상을 바꾸려면 시스템 설정에서 그 마이크를 고른 뒤 `micpeg pick`을 실행하세요.
 
 ## 설정
 
-`~/.config/micpin/config.json` — [`config.example.json`](config.example.json) 참고.
-재시작 없이 재적용하려면 `launchctl kill SIGHUP gui/$(id -u)/com.micpin.agent`,
-아니면 그냥 `micpin on`.
+`~/.config/micpeg/config.json` — [`config.example.json`](config.example.json) 참고.
+재시작 없이 재적용하려면 `launchctl kill SIGHUP gui/$(id -u)/com.micpeg.agent`,
+아니면 그냥 `micpeg on`.
 
 | 키 | 기본값 | 의미 |
 |---|---|---|
-| `enabled` | `true` | 마스터 스위치. `micpin off`가 이 값을 씁니다. |
+| `enabled` | `true` | 마스터 스위치. `micpeg off`가 이 값을 씁니다. |
 | `input.priority` | *(설치 시 자동)* | `{uid, name}` 순서 목록. 연결돼 있는 첫 항목이 대상. UID를 우선 매칭하고 `name`은 폴백입니다. |
 | `blockTransports` | `["bluetooth", "bluetoothle"]` | 되돌릴 transport. 나머지는 전부 의도적 선택으로 봅니다. |
 | `arrivalWindowSeconds` | `15` | 차단 대상 장치가 이 시간 내에 도착했다면 자동 전환이지 사용자 결정이 아닙니다. |
 | `debounceMs` | `300` | 알림 폭주를 합칩니다. |
 | `reverifyDelaySeconds` | `1.0` | 쓰기가 삼켜졌을 경우를 대비해 1회 재확인합니다. |
-| `postWriteGraceSeconds` | `3.0` | micpin이 쓴 직후 이만큼 안에 기본값이 옮겨졌다면 macOS의 flip-back이지 사람이 한 게 아닙니다. |
+| `postWriteGraceSeconds` | `3.0` | micpeg이 쓴 직후 이만큼 안에 기본값이 옮겨졌다면 macOS의 flip-back이지 사람이 한 게 아닙니다. |
 
 장치 UID는 재부팅과 USB 포트 변경을 견딥니다(USB 마이크의 UID에는 시리얼 번호가 박혀 있습니다).
-micpin이 이름이나 device ID가 아니라 UID를 대상으로 삼는 이유입니다.
+micpeg이 이름이나 device ID가 아니라 UID를 대상으로 삼는 이유입니다.
 
 **`virtual`이나 `unknown`을 `blockTransports`에 넣지 마세요.** Elgato는 MicrophoneFX 사용 시
 Wave Link *가상* 장치를 기본 입력으로 지정하라고 안내하고, Continuity iPhone Mic은 `ccwd`로
@@ -130,7 +130,7 @@ Wave Link *가상* 장치를 기본 입력으로 지정하라고 안내하고, C
 
 자동인지 의도적인지는 **타이밍이 아니라 transport type**으로 1차 판정합니다. macOS가 스스로
 기본 입력을 가져가는 경로는 블루투스뿐이기 때문입니다. 타이밍은 보조 신호이고,
-가장 강한 증거는 micpin 자신의 쓰기 시각입니다 — micpin이 쓴 400ms 뒤에 기본값이 옮겨졌다면
+가장 강한 증거는 micpeg 자신의 쓰기 시각입니다 — micpeg이 쓴 400ms 뒤에 기본값이 옮겨졌다면
 그건 사람이 한 일이 아닙니다.
 
 출시 전 발견해 고친 설계 결함 3건을 포함한 전체 근거는 **[docs/design.md](docs/design.md)**(영문),
@@ -149,20 +149,20 @@ Wave Link *가상* 장치를 기본 입력으로 지정하라고 안내하고, C
 - **블루투스 마이크를 연결 후 약 15초 안에 직접 고르면 한 번 되돌려집니다.**
   CoreAudio 어디에도 "누가 이 변경을 시작했는가"를 알려주는 신호가 없어서
   (`log stream --predicate 'subsystem == "com.apple.coreaudio"'`가 이 전환에 대해 0줄을 냅니다)
-  휴리스틱이 불가피합니다. 잠시 뒤 다시 고르거나 `micpin off`를 쓰세요.
+  휴리스틱이 불가피합니다. 잠시 뒤 다시 고르거나 `micpeg off`를 쓰세요.
 - 로그인 직후와 `coreaudiod` 재시작 직후 약 15초도 마찬가지입니다.
 - 설치 경로가 `~/.local/bin`으로 고정돼 있습니다.
 - **미해결 사건 1건:** 2026-09-10에 에이전트가 `PINNED`를 보고하는 동안 실제 기본 입력이
   약 1.5시간 블루투스 헤드셋에 머물렀고 그동안 로그가 0줄이었습니다. 잠자기, `coreaudiod` 재시작,
   프로세스 재기동, 큐 교착, 리스너 사망은 모두 배제했고 알림 유실이 남은 가설입니다.
-  조용히 포기하던 경로 3곳을 보험으로 보강했습니다. `micpin status`로 탐지되고 `micpin on`으로
+  조용히 포기하던 경로 3곳을 보험으로 보강했습니다. `micpeg status`로 탐지되고 `micpeg on`으로
   즉시 복구됩니다.
 
 ## 제거
 
 ```sh
-micpin uninstall
-rm -rf ~/.config/micpin ~/Library/Logs/micpin.log ~/.local/bin/micpin
+micpeg uninstall
+rm -rf ~/.config/micpeg ~/Library/Logs/micpeg.log ~/.local/bin/micpeg
 ```
 
 ## 라이선스

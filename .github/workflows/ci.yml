@@ -22,7 +22,7 @@ jobs:
 
       - name: Check deployment target
         run: |
-          BIN="$(swift build -c release --arch arm64 --arch x86_64 --show-bin-path)/micpin"
+          BIN="$(swift build -c release --arch arm64 --arch x86_64 --show-bin-path)/micpeg"
           lipo -info "$BIN"
           otool -l "$BIN" | grep -A3 LC_BUILD_VERSION
 

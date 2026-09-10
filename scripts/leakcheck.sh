@@ -1,33 +1,33 @@
 #!/bin/zsh
 # One-shot soak test: wait until a wall-clock deadline, then measure the running
-# micpin agent against a baseline captured when the timer was armed. Ends by
+# micpeg agent against a baseline captured when the timer was armed. Ends by
 # itself; leaves only the result file.
 #
 #   ./scripts/leakcheck.sh <deadline_epoch> <base_kb> <base_at> <base_cpu> <base_log_lines>
 #
 # Arm it 24h out with:
-#   L="gui/$(id -u)/com.micpin.agent"
+#   L="gui/$(id -u)/com.micpeg.agent"
 #   P=$(launchctl print "$L" | awk '/pid = /{print $3; exit}')
 #   ./scripts/leakcheck.sh $(( $(date +%s) + 86400 )) \
 #       "$(footprint -p $P | awk '/phys_footprint:/{print $2}')" \
 #       "$(date '+%Y-%m-%d %H:%M:%S')" \
 #       "$(ps -o time= -p $P | tr -d ' ')" \
-#       "$(wc -l < ~/Library/Logs/micpin.log | tr -d ' ')" &
+#       "$(wc -l < ~/Library/Logs/micpeg.log | tr -d ' ')" &
 DEADLINE=$1; BASE_KB=$2; BASE_AT=$3; BASE_CPU=$4; BASE_LOG=$5
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="$REPO/leakcheck-result.txt"   # gitignored: contains local device names
-LOGF="$HOME/Library/Logs/micpin.log"
+LOGF="$HOME/Library/Logs/micpeg.log"
 
 # Poll the wall clock rather than one long sleep: sleep(86400) does not advance while
 # the machine is asleep, so it would fire late by however long the Mac napped.
 while [ "$(date +%s)" -lt "$DEADLINE" ]; do sleep 300; done
 
-L="gui/$(id -u)/com.micpin.agent"
+L="gui/$(id -u)/com.micpeg.agent"
 P=$(launchctl print "$L" 2>/dev/null | awk '/pid = /{print $3; exit}')
 
 {
-  echo "micpin 24h soak check — $(date '+%Y-%m-%d %H:%M:%S')"
+  echo "micpeg 24h soak check — $(date '+%Y-%m-%d %H:%M:%S')"
   echo "baseline: $BASE_AT / ${BASE_KB} KB / CPU ${BASE_CPU} / log ${BASE_LOG} lines"
   echo "=========================================================="
   if [ -z "$P" ]; then
@@ -59,8 +59,8 @@ P=$(launchctl print "$L" 2>/dev/null | awk '/pid = /{print $3; exit}')
     # Correctness, not just cost: on 2026-09-10 the daemon reported PINNED while the
     # default input actually sat on the Bluetooth headset for ~1.5h. A single daily
     # sample is a weak net for that, but it costs nothing to look.
-    ST=$(python3 -c "import json;d=json.load(open('$HOME/.config/micpin/state.json'));print(d['state'],'|',d['target'],'|',d['currentInput'])" 2>/dev/null)
-    LIVE=$(micpin status 2>/dev/null | awk -F': *' '/^default input/{print $2}' | sed 's/ \[.*//')
+    ST=$(python3 -c "import json;d=json.load(open('$HOME/.config/micpeg/state.json'));print(d['state'],'|',d['target'],'|',d['currentInput'])" 2>/dev/null)
+    LIVE=$(micpeg status 2>/dev/null | awk -F': *' '/^default input/{print $2}' | sed 's/ \[.*//')
     echo "--- state consistency ---"
     echo "  state file    : $ST"
     echo "  live default  : $LIVE"
@@ -82,4 +82,4 @@ P=$(launchctl print "$L" 2>/dev/null | awk '/pid = /{print $3; exit}')
 } > "$OUT" 2>&1
 
 for i in 1 2 3; do afplay /System/Library/Sounds/Glass.aiff; sleep 0.4; done
-osascript -e "display notification \"micpin 24h soak check complete\" with title \"micpin\" subtitle \"$OUT\" sound name \"Glass\"" 2>/dev/null
+osascript -e "display notification \"micpeg 24h soak check complete\" with title \"micpeg\" subtitle \"$OUT\" sound name \"Glass\"" 2>/dev/null

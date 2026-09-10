@@ -1,6 +1,6 @@
 # Design
 
-Why micpin is built the way it is, and the three CoreAudio traps that shaped it.
+Why micpeg is built the way it is, and the three CoreAudio traps that shaped it.
 
 The Korean development log with the full blow-by-blow — including the tests that failed and
 what each failure changed — is at [`ko/engineering-log.md`](ko/engineering-log.md).
@@ -19,7 +19,7 @@ In priority order, as stated by the person who needed this:
 
 Constraint 1 is enforced structurally rather than by discipline: output keys are absent from
 the config schema, so there is nothing to switch on. `grep -c DefaultOutputDevice
-Sources/micpin/main.swift` returns 0.
+Sources/micpeg/main.swift` returns 0.
 
 ---
 
@@ -78,7 +78,7 @@ One `'srst'` listener covers both HAL restarts and wake-from-sleep breakage. An
 and cleared the arrival timestamps too. Because dispatch ordering guaranteed `'dev#'` ran first,
 recovery deterministically destroyed evidence that had been recorded milliseconds earlier, and
 the agent yielded to the headset every time. The only cache worth discarding is the
-`AudioDeviceID` cache — and micpin does not keep one, because `'uidd'` resolution is cheap
+`AudioDeviceID` cache — and micpeg does not keep one, because `'uidd'` resolution is cheap
 enough that caching IDs only buys you an ID-reuse race.
 
 Recovery now does exactly three things: re-register listeners, invalidate the pending
@@ -166,8 +166,8 @@ Measured effect: **10.1 ms → 0.070 ms per filtered event, a 145× reduction.**
 |---|---|---|
 | `ABSENT` | No configured target present | Completely inert |
 | `PINNED` | Target present, watching | Reverses blocked-transport transitions only |
-| `YIELDED` | User chose something else | Inert until the target reconnects, `micpin on`, or the yielded-to device disappears |
-| `PAUSED` | `micpin off` | Inert |
+| `YIELDED` | User chose something else | Inert until the target reconnects, `micpeg on`, or the yielded-to device disappears |
+| `PAUSED` | `micpeg off` | Inert |
 | `BACKOFF` | 3 reverts within 5 s | 60 s inert + a loud warning |
 
 `BACKOFF` must log loudly. Per [FB15113809](https://developer.apple.com/forums/thread/763583), a
@@ -178,16 +178,16 @@ guard in silence.
 
 Three independent pieces of evidence, checked in order of strength:
 
-1. **Post-write grace** — the default moved within `postWriteGraceSeconds` of micpin's own
+1. **Post-write grace** — the default moved within `postWriteGraceSeconds` of micpeg's own
    write. Structurally a flip-back; nobody re-picks a device in 400 ms. This depends on nothing
-   but micpin's own clock, which makes it immune to the entire class of failures that broke the
+   but micpeg's own clock, which makes it immune to the entire class of failures that broke the
    arrival-window approach three times.
 2. **System churn window** — armed for 15 s at startup and after a HAL reset, when macOS is
    re-deciding every default from scratch.
 3. **Arrival window** — the device itself, or any blocked-transport device, appeared within
    `arrivalWindowSeconds`.
 
-All three are needed. In one HAL-restart test, micpin had not written anything (the default was
+All three are needed. In one HAL-restart test, micpeg had not written anything (the default was
 already correct), so there was no write clock — the first hijack 4.3 s later could only be
 caught by the arrival window. The re-hijack 436 ms after that revert could only be caught by
 post-write grace. Either mechanism alone fails.
@@ -258,4 +258,4 @@ input in System Settings".
 
 Because `cpal` resolves the device when push-to-talk is pressed rather than at startup, a late
 revert is still a correct revert. There is no latency pressure on the correction path — which
-is why micpin uses a 300 ms debounce and a single 1 s re-verify instead of a polling ladder.
+is why micpeg uses a 300 ms debounce and a single 1 s re-verify instead of a polling ladder.

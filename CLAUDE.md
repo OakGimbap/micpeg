@@ -2,7 +2,7 @@
 
 ## Project
 
-`micpin` — a macOS launchd agent that keeps a chosen microphone as the system default audio
+`micpeg` — a macOS launchd agent that keeps a chosen microphone as the system default audio
 **input**, reverting the automatic switch macOS performs when a Bluetooth headset connects.
 
 Read [`docs/design.md`](docs/design.md) before changing anything in the judgement path. It
@@ -50,8 +50,8 @@ records three CoreAudio traps that each cost a full round of real-hardware testi
 ## File structure
 
 ```
-Sources/micpin/main.swift    # entire program: daemon + CLI
-scripts/install.sh           # build + micpin install
+Sources/micpeg/main.swift    # entire program: daemon + CLI
+scripts/install.sh           # build + micpeg install
 scripts/leakcheck.sh         # 24h soak test (writes a gitignored result file)
 docs/design.md               # architecture + the three CoreAudio traps
 docs/verification.md         # measured numbers, test matrix, open issue
@@ -59,8 +59,8 @@ docs/ko/engineering-log.md   # original Korean development log
 ```
 
 Runtime files, all outside the repo:
-`~/.local/bin/micpin`, `~/.config/micpin/{config,state}.json`,
-`~/Library/LaunchAgents/com.micpin.agent.plist`, `~/Library/Logs/micpin.log`
+`~/.local/bin/micpeg`, `~/.config/micpeg/{config,state}.json`,
+`~/Library/LaunchAgents/com.micpeg.agent.plist`, `~/Library/Logs/micpeg.log`
 
 ## Development workflow
 
@@ -69,9 +69,9 @@ swift build -c release                          # host arch
 swift build -c release --arch arm64 --arch x86_64   # universal
 ./scripts/install.sh                            # build + install + bootstrap
 
-micpin status
-tail -f ~/Library/Logs/micpin.log
-launchctl kill SIGHUP gui/$(id -u)/com.micpin.agent   # reload config
+micpeg status
+tail -f ~/Library/Logs/micpeg.log
+launchctl kill SIGHUP gui/$(id -u)/com.micpeg.agent   # reload config
 ```
 
 **Testing rule: an idle daemon with dead listeners is indistinguishable from a healthy one.**
