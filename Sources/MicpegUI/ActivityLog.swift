@@ -123,7 +123,7 @@ public enum ActivityLog {
         guard parts.count == 3 else { return nil }
         let message = parts[2]
         guard let kind = classify(message) else { return nil }
-        guard let at = DaemonState.stamp.date(from: "\(parts[0]) \(parts[1])") else { return nil }
+        guard let at = DaemonState.date(fromStamp: "\(parts[0]) \(parts[1])") else { return nil }
         return Activity(at: at, kind: kind, raw: String(message))
     }
 

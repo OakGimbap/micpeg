@@ -79,8 +79,11 @@ absent "the daemon never names the default output" \
 
 # Keeps "the background agent never opens the microphone" literally true now that the
 # app has a level meter.
+# The pattern is `AVF`, not `AVFoundation`: the app's own capture code imports **AVFAudio**,
+# so a check spelled `AVFoundation` would have let `import AVFAudio` plus an AVAudioEngine into
+# the daemon target while reporting ok — an invariant that passes by looking at the wrong word.
 absent "the daemon cannot open an audio stream" \
-       "AVFoundation" \
+       "AVF" \
        Sources/micpeg Sources/MicpegAudio
 
 # Stage 2 measured that `sfltool dumpbtm` demands system.privilege.admin and that authd

@@ -81,6 +81,24 @@ public struct DaemonState: Equatable, Sendable {
         f.locale = Locale(identifier: "en_US_POSIX")
         return f
     }()
+
+    /// The same format read in whatever locale and calendar the daemon is writing in.
+    private static let stampInCurrentLocale: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS"
+        return f
+    }()
+
+    /// Parse a stamp the daemon wrote.
+    ///
+    /// POSIX first, then the current locale. The fallback exists because the daemon's
+    /// formatter sets no locale, so on a Mac whose region selects a non-Gregorian calendar it
+    /// writes a Japanese or Buddhist year — and a POSIX-only parser would reject every line,
+    /// emptying "Recent activity" with nothing to show why. The one-line fix belongs in the
+    /// daemon; the daemon is finished, so the app absorbs it instead.
+    static func date(fromStamp text: String) -> Date? {
+        stamp.date(from: text) ?? stampInCurrentLocale.date(from: text)
+    }
 }
 
 // MARK: - config.json

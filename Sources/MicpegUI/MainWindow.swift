@@ -81,6 +81,12 @@ public struct MainWindow: View {
                 Task { errorMessage = await model.pick(device) }
             }
         }
+        // The meter and its Stop Test button exist only in the configured body. If the
+        // settings file is removed while a test is running the branch disappears without
+        // `onDisappear` firing, leaving the microphone open and no control to close it.
+        .onChange(of: model.body) { _, body in
+            if body != .configured { test.stop() }
+        }
         .onDisappear {
             test.stop()
             // Releases the directory descriptor, its dispatch source and three HAL listeners.

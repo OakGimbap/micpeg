@@ -50,7 +50,10 @@ struct MicpegSettingsApp: App {
     /// decision to make in onboarding.
     @MainActor
     private func reconcile() async {
-        let survey = InstallSurvey.take()
+        // Off the main actor: this forks `launchctl print` and waits for it, then makes two
+        // synchronous ServiceManagement round trips to backgroundtaskmanagementd. On the main
+        // thread that is the window's first frame blocked for as long as btmd takes.
+        let survey = await Task.detached { InstallSurvey.take() }.value
         if case .moved(let from) = survey.verdict {
             let outcome = await Task.detached { Migration.repair() }.value
             AgentController.report(outcome, label: "auto-repair after a move")
@@ -71,14 +74,40 @@ struct MicpegSettingsApp: App {
         // The daemon is running, just not this bundle's. Kept separate because the sentence
         // and the remedy are both different: nothing here is broken, there are simply two
         // copies of the app and the other one got there first.
+        //
+        // Only when the running executable really is inside an `.app`. The first version
+        // stripped three path components unconditionally, which is right for
+        // `<App>.app/Contents/MacOS/micpeg` and wrong for everything else — and one of the
+        // "everything else" cases is reachable: delete the legacy plist by hand without
+        // `launchctl bootout` and a daemon keeps running from `~/.local/bin/micpeg`, which
+        // stripped down to the user's home directory. The banner would then have told them to
+        // delete it.
         case .foreignBundle(let running):
-            return .otherCopyRunning(at: running.deletingLastPathComponent()
-                .deletingLastPathComponent().deletingLastPathComponent().path)
+            if let app = Self.enclosingAppBundle(of: running) {
+                return .otherCopyRunning(at: app.path)
+            }
+            // Not an app: a daemon left over from the command-line install. Nothing of this
+            // bundle's is keeping the microphone, which is the other sentence exactly.
+            return .notKeeping
         // These three mean nothing is keeping the microphone: one sentence, one repair.
         // `.moved` reaches here only if the automatic repair above failed.
         case .notRegistered, .stale, .moved:
             return .notKeeping
         }
+    }
+
+    /// The `.app` enclosing an executable, if there is one. The daemon's own
+    /// `enclosingAppBundle()` walks upward like this for the same reason; a fixed number of
+    /// `deletingLastPathComponent()` calls only works for one layout.
+    private static func enclosingAppBundle(of executable: URL) -> URL? {
+        var directory = executable.deletingLastPathComponent()
+        while directory.path != "/" {
+            if directory.pathExtension == "app" { return directory }
+            let parent = directory.deletingLastPathComponent()
+            if parent.path == directory.path { break }
+            directory = parent
+        }
+        return nil
     }
 
     @MainActor

@@ -1018,6 +1018,48 @@ and `MicpegApp meter` and the window's meter ran two separate copies of the AVAu
 setup, which made "the diagnostic exercises the same tap" a promise rather than a fact. All
 three now come from one place.
 
+#### 21. What a correctness review found after that
+
+Three of these could put the microphone in a state the user could not get out of.
+
+**Two presses of Start Test could leave the microphone open with no way to close it.** The
+`guard !isRunning` ran before the asynchronous permission callback, and `isRunning` is only set
+inside it, so a double press — or a press while the TCC prompt is up — reached `reallyStart()`
+twice. The second overwrote the engine, the observer and the 30 Hz timer with no teardown, so
+`stop()` could only ever reach the second: the first engine kept its tap installed, with the
+system's microphone indicator lit and the Stop button no longer connected to it. A stop issued
+*during* the permission request had the mirror problem — it did nothing, and the callback
+started anyway.
+
+**Closing a second window blinded the first.** `WindowGroup` gives File ▸ New Window for free
+and the model is one `@State` shared by every window, so the first `onDisappear` released the
+HAL listeners and the directory watcher for all of them — and `startWatching`'s guard meant
+they never came back. The surviving window kept showing what it had last read and stopped
+updating, silently. The watchers are reference-counted now.
+
+**A banner could tell someone to delete their home directory.** `.foreignBundle` was turned
+into a path by stripping exactly three components, which is right for
+`<App>.app/Contents/MacOS/micpeg` and wrong otherwise — and "otherwise" is reachable: remove
+the legacy plist by hand without `launchctl bootout` and a daemon keeps running from
+`~/.local/bin/micpeg`, which strips to `/Users/<name>`. The copy then read "The copy at
+/Users/<name> … delete it and reopen this one." It walks up looking for a `.app` now, and when
+there is none it is not another copy of the app at all.
+
+Also fixed: the meter and its Stop button live only in the configured body, so removing
+`config.json` mid-test took the control away while the engine ran; `runIfRequested()` treated
+*any* first argument as a command and exited with status 2 before a window existed, which an
+argument injected by Xcode or `open --args` would have triggered; and the launch survey forked
+`launchctl` and made two ServiceManagement round trips on the main thread, blocking the first
+frame.
+
+Two invariant lessons. The audio guard grepped for `AVFoundation` while the project's capture
+code imports **AVFAudio** — it would have reported ok while the daemon opened a stream. Proved
+by injecting `import AVFAudio` plus an `AVAudioEngine` into the daemon: the widened pattern
+fails, the old one did not. And the daemon's timestamp formatter sets no locale, so on a Mac
+configured for a non-Gregorian calendar it writes a year the app's POSIX parser rejects and
+"Recent activity" empties out. The one-line fix is in the daemon and the daemon is finished, so
+the app parses with the current locale as a fallback instead.
+
 **A note on a false alarm.** During this pass the app appeared to launch with no window and
 spin at 38% CPU. The committed build did the same, which is what identified it: the screen was
 locked (`CGSSessionScreenIsLocked = Yes`), and a locked session does not realise a new app's

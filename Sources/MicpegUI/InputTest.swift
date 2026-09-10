@@ -68,6 +68,12 @@ public final class InputTest {
     private var observer: NSObjectProtocol?
     private var restart: DispatchWorkItem?
     private var quietSince: Date?
+    /// A permission request is in flight. Separate from `isRunning`, which only becomes true
+    /// once an engine exists.
+    private var isStarting = false
+    /// Cleared by `stop()`, so a stop during an in-flight permission request is honoured when
+    /// the callback lands instead of starting anyway.
+    private var wantsToRun = false
 
     /// Written from the audio thread, read from the main actor. A tap callback must not touch
     /// observable state — SwiftUI would be asked to redraw from a real-time thread — so the
@@ -84,13 +90,23 @@ public final class InputTest {
     // MARK: - Control
 
     public func start() {
-        guard !isRunning else { return }
+        guard !isRunning, !isStarting else { return }
+        isStarting = true
+        wantsToRun = true
         failure = nil
         // app-ui.md: request permission when the user starts a test, never at launch. A
         // permission prompt during onboarding, for a capability not yet in use, costs installs.
         AVAudioApplication.requestRecordPermission { [weak self] granted in
             Task { @MainActor in
                 guard let self else { return }
+                // The guard in start() ran before this callback, and `isRunning` is only set
+                // below — so two presses, or a press while the TCC prompt is up, both arrive
+                // here. Without re-checking, the second reallyStart() would overwrite the
+                // engine, the observer and the timer with no teardown, and stop() could then
+                // only ever reach the second: the first engine would keep its tap installed
+                // with the microphone indicator lit and no control left to turn it off.
+                self.isStarting = false
+                guard self.wantsToRun, !self.isRunning else { return }
                 guard granted else {
                     self.failure = Copy.microphonePermissionDenied
                     return
@@ -101,6 +117,8 @@ public final class InputTest {
     }
 
     public func stop() {
+        wantsToRun = false
+        isStarting = false
         restart?.cancel()
         restart = nil
         timer?.invalidate()
@@ -121,6 +139,9 @@ public final class InputTest {
     // MARK: - Engine
 
     private func reallyStart() {
+        // Idempotent by construction rather than by the callers being careful. Anything that
+        // reaches here with an engine already running tears it down first.
+        if engine != nil { stop(); wantsToRun = true }
         switch Self.openTap(onBuffer: { [latest] buffer in
             latest.set(Self.level(fromRMS: Self.rms(of: buffer)))
         }) {
