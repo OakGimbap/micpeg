@@ -60,14 +60,24 @@ public final class AppModel {
         public var severity: Severity
         public var title: String
         public var body: String
-        public var actionTitle: String?
-        public var action: Action?
+        public var action: Action? = nil
 
         public enum Action: Equatable {
             case openLoginItems, repairAgent, migrateLegacy
             /// Opens the Activity window. Handled by the window itself, which has the
             /// environment to open another; the rest are registration work for the app target.
             case showActivity
+
+            /// Each action has one button title, so the title belongs to the action rather
+            /// than to a second optional every banner had to remember to set alongside it.
+            public var title: String {
+                switch self {
+                case .openLoginItems: return Copy.approvalAction
+                case .repairAgent:    return Copy.notRunningAction
+                case .migrateLegacy:  return Copy.legacyAction
+                case .showActivity:   return Copy.showActivity
+                }
+            }
         }
     }
 
@@ -82,11 +92,6 @@ public final class AppModel {
     /// Newest first. Shown in the Activity window; read here too, because a failed revert
     /// appears nowhere else and the main window's banner has to be able to say so.
     public private(set) var activity: [Activity] = []
-
-    /// Resolved once when the config is read. The alternative was turning a name into a
-    /// four-character string per device per redraw to compare against another string built the
-    /// same way — three allocations to answer a question about two integers.
-    private var blockedCodes: Set<UInt32> = []
 
     private var fileWatch: PathWatch?
     private var logWatch: PathWatch?
@@ -132,6 +137,10 @@ public final class AppModel {
     /// once the last window has gone. Without it they stayed installed for the life of the
     /// process, watching for a window that was not there.
     public func stopWatching() {
+        // Every scene pairs this with its own startWatching() through onAppear/onDisappear,
+        // which SwiftUI matches. An unmatched stop would take the watchers out from under a
+        // window still relying on them, so it is a bug to find rather than a count to clamp.
+        assert(watchers > 0, "stopWatching() without a matching startWatching()")
         watchers = max(0, watchers - 1)
         guard watchers == 0 else { return }
         fileWatch = nil
@@ -153,7 +162,6 @@ public final class AppModel {
     public func reloadState() {
         daemon = DaemonState.read()
         config = PinnedConfig.read()
-        blockedCodes = AudioSnapshot.transportCodes(named: pinned?.blockedTransports ?? [])
     }
 
     /// The log, on its own watch. A transition writes both the log and `state.json`; keeping
@@ -189,10 +197,7 @@ public final class AppModel {
     /// The name of the device the user chose, from the config rather than from the daemon's
     /// state file: `state.json` reports `(absent)` for a target that is not connected, and the
     /// window still needs to name it in order to say "it isn't connected".
-    public var targetName: String? {
-        guard let first = pinned?.priority.first else { return nil }
-        return first.name ?? first.uid
-    }
+    public var targetName: String? { pinned?.targetName }
 
     /// The chosen device, as a device rather than a name — nil when it is not connected.
     /// The picker opens on it so the user can see what is currently kept before changing it.
@@ -201,15 +206,12 @@ public final class AppModel {
         return inputs.first { $0.uid == uid }
     }
 
-    public var targetIsConnected: Bool {
-        guard let uid = pinned?.priority.first?.uid else { return false }
-        return inputs.contains { $0.uid == uid }
-    }
+    public var targetIsConnected: Bool { pinnedDevice != nil }
 
     /// The microphone the daemon would keep right now: the first priority entry that is
-    /// connected, by UID and otherwise by name — the daemon's own rule (`resolveTarget()`,
-    /// main.swift:490-505). `pinnedDevice` looks only at the first entry, which is right for
-    /// the picker and not for "is the input what Micpeg would choose".
+    /// connected, by UID and otherwise by name — the daemon's own rule (`resolveTarget()` in
+    /// main.swift). `pinnedDevice` looks only at the first entry, which is right for the picker
+    /// and not for "is the input what Micpeg would choose".
     public var keptDevice: AudioDevice? {
         for entry in pinned?.priority ?? [] {
             if let uid = entry.uid, let device = inputs.first(where: { $0.uid == uid }) {
@@ -224,8 +226,8 @@ public final class AppModel {
 
     /// Whether the input in use is the one Micpeg keeps. The ✓ and the summary used to claim
     /// it from the daemon's state alone, and a failed revert leaves that state at PINNED
-    /// (main.swift:660-666) — so both said "stays your microphone" beside an Input row that
-    /// named another one.
+    /// (`revert(to:reason:)` returns before its transition) — so both said "stays your
+    /// microphone" beside an Input row that named another one.
     public var inputIsTarget: Bool {
         guard let kept = keptDevice, let current = currentInput else { return false }
         return kept.id == current.id
@@ -263,17 +265,14 @@ public final class AppModel {
         switch agent {
         case .needsApproval:
             return Banner(severity: .failure, title: Copy.approvalTitle,
-                          body: Copy.approvalBody, actionTitle: Copy.approvalAction,
-                          action: .openLoginItems)
+                          body: Copy.approvalBody, action: .openLoginItems)
         case .legacyPresent:
             return Banner(severity: .warning, title: Copy.legacyTitle,
-                          body: Copy.legacyBody, actionTitle: Copy.legacyAction,
-                          action: .migrateLegacy)
+                          body: Copy.legacyBody, action: .migrateLegacy)
         case .notKeeping:
             if hasSomethingToEnforce {
                 return Banner(severity: .failure, title: Copy.notRunningTitle,
-                              body: Copy.notRunningBody, actionTitle: Copy.notRunningAction,
-                              action: .repairAgent)
+                              body: Copy.notRunningBody, action: .repairAgent)
             }
         case .otherCopyRunning, .repairedAfterMove, .healthy:
             break
@@ -286,21 +285,21 @@ public final class AppModel {
         switch agent {
         case .otherCopyRunning(let path):
             return Banner(severity: .warning, title: Copy.otherCopyTitle,
-                          body: Copy.otherCopyBody(path), actionTitle: nil, action: nil)
+                          body: Copy.otherCopyBody(path))
         case .repairedAfterMove(let from):
             return Banner(severity: .informational, title: Copy.movedTitle,
-                          body: Copy.movedBody(from), actionTitle: nil, action: nil)
+                          body: Copy.movedBody(from))
         case .needsApproval, .legacyPresent, .notKeeping, .healthy:
             break
         }
 
         if body == .settingsUnreadable {
             return Banner(severity: .warning, title: Copy.configUnreadableTitle,
-                          body: Copy.configUnreadableBody, actionTitle: nil, action: nil)
+                          body: Copy.configUnreadableBody)
         }
         if daemon?.kind == .backoff {
             return Banner(severity: .warning, title: Copy.conflictTitle,
-                          body: Copy.conflictBody, actionTitle: nil, action: nil)
+                          body: Copy.conflictBody)
         }
         return nil
     }
@@ -311,12 +310,14 @@ public final class AppModel {
     ///
     ///   - Micpeg is meant to be keeping the microphone: configured, not paused, and not
     ///     standing aside, paused or backed off. A failed revert leaves the state wherever it
-    ///     was (main.swift:660-666), so the state alone cannot say it failed.
+    ///     was (`revert(to:reason:)` returns before its transition), so the state alone cannot
+    ///     say it failed.
     ///   - The newest event about the input is the failure. Without this, the few hundred
     ///     milliseconds between macOS switching and Micpeg switching back would flash it.
     ///   - Right now, live, the kept microphone is connected and is not the input. Fixing it by
-    ///     hand in System Settings writes no log line (main.swift:715-722), so a rule read from
-    ///     the log alone would stay up forever.
+    ///     hand in System Settings leaves the state at PINNED, so `transition()` writes no
+    ///     line, and the `JUDGED` diagnostic `evaluate()` writes instead is not an event. A rule
+    ///     read from the log alone would stay up forever.
     private var restoreFailedBanner: Banner? {
         guard body == .configured, !isPaused else { return nil }
         switch daemon?.kind {
@@ -326,23 +327,12 @@ public final class AppModel {
         guard activity.first(where: \.kind.concernsTheInput)?.kind == .problem(.restoreFailed),
               let kept = keptDevice, !inputIsTarget else { return nil }
         return Banner(severity: .warning, title: Copy.restoreFailedTitle,
-                      body: Copy.restoreFailedBody(kept.name),
-                      actionTitle: Copy.showActivity, action: .showActivity)
+                      body: Copy.restoreFailedBody(kept.name), action: .showActivity)
     }
 
     /// The silence hint, chosen by which device has gone quiet.
     public var silenceHint: String {
         currentInput?.isBuiltIn == true ? Copy.silenceHintBuiltIn : Copy.silenceHint
-    }
-
-    /// What an Activity row says, as a sentence. Only VoiceOver reads it — on screen the row is
-    /// a badge and a device moving — so this is the one place the words have to be complete.
-    public func accessibilitySentence(for activity: Activity) -> String {
-        let sentence = Copy.activitySentence(activity.kind, target: targetName ?? Copy.noDevice)
-        guard activity.count > 1 else { return sentence }
-        // Its own sentence: the row appends the time next, and "3 times 39 min ago" read as one
-        // run-on phrase through the accessibility API.
-        return "\(sentence) \(Copy.repeatCountSpoken(activity.count))."
     }
 
     // MARK: - Mutations, all through the CLI
@@ -356,24 +346,25 @@ public final class AppModel {
     @discardableResult
     public func pick(_ device: AudioDevice) async -> String? {
         guard let uid = device.uid else { return Copy.deviceHasNoIdentifier }
-        let cli = self.cli
-        let result = await Task.detached(priority: .userInitiated) { cli.pick(uid: uid) }.value
-        reloadState()
-        return result.ok ? nil : result.output
+        return await mutate { $0.pick(uid: uid) }
     }
 
     @discardableResult
     public func setPaused(_ paused: Bool) async -> String? {
+        await mutate { $0.setEnabled(!paused) }
+    }
+
+    /// The CLI call off the main actor, then a fresh read of what it changed.
+    private func mutate(_ call: @escaping @Sendable (MicpegCLI) -> MicpegCLI.Result) async
+        -> String? {
         let cli = self.cli
-        let result = await Task.detached(priority: .userInitiated) {
-            cli.setEnabled(!paused)
-        }.value
+        let result = await Task.detached(priority: .userInitiated) { call(cli) }.value
         reloadState()
         return result.ok ? nil : result.output
     }
 
     public func isBlocked(_ device: AudioDevice) -> Bool {
-        blockedCodes.contains(device.transportCode)
+        pinned?.blockedTransportCodes.contains(device.transportCode) ?? false
     }
 
     // MARK: - Previews
@@ -399,7 +390,6 @@ public final class AppModel {
                         transportCode: kAudioDeviceTransportTypeBuiltIn),
             AudioDevice(id: 3, uid: "uid-pods", name: "AirPods Pro",
                         transportCode: kAudioDeviceTransportTypeBluetooth)]
-        model.blockedCodes = AudioSnapshot.transportCodes(named: ["bluetooth", "bluetoothle"])
         model.currentInput = model.inputs.first { $0.uid == currentInputUID }
         model.currentOutput = AudioDevice(id: 4, uid: "uid-out", name: "AirPods Pro",
                                           transportCode: kAudioDeviceTransportTypeBluetooth)

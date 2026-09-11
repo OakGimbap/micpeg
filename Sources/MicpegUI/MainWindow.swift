@@ -27,7 +27,7 @@ import CoreAudio
 import SwiftUI
 
 public struct MainWindow: View {
-    @Bindable private var model: AppModel
+    private let model: AppModel
     private let onBannerAction: (AppModel.Banner.Action) -> Void
     /// Called after the user chooses a microphone for the first time. Choosing writes the
     /// config through the CLI, which is not enough on its own — with no agent registered there
@@ -37,7 +37,10 @@ public struct MainWindow: View {
     @State private var showingPicker = false
     @State private var errorMessage: String?
     @Environment(\.openWindow) private var openWindow
-    @State private var test: InputTest
+    /// Built on every init of this struct and discarded after the first, like any `@State`
+    /// default — `State(wrappedValue:)` written out in `init` is no lazier, which is what this
+    /// used to be on the theory that it was. Cheap: no engine exists until `start()`.
+    @State private var test = InputTest()
 
     public init(model: AppModel,
                 onBannerAction: @escaping (AppModel.Banner.Action) -> Void,
@@ -45,9 +48,6 @@ public struct MainWindow: View {
         self.model = model
         self.onBannerAction = onBannerAction
         self.onFirstChoice = onFirstChoice
-        // Not a default value on the property: that expression is evaluated on every struct
-        // init, allocating an InputTest that SwiftUI immediately discards.
-        _test = State(wrappedValue: InputTest())
     }
 
     public var body: some View {
@@ -87,18 +87,14 @@ public struct MainWindow: View {
                 Task { errorMessage = await model.pick(device) }
             }
         }
-        // The meter and its Stop Test button exist only in the configured body. If the
-        // settings file is removed while a test is running the branch disappears without
-        // `onDisappear` firing, leaving the microphone open and no control to close it.
+        // The meter and its Stop Test button exist only in the configured rows, which an
+        // unreadable settings file still shows. If the settings file is removed while a test is
+        // running the branch disappears without `onDisappear` firing, leaving the microphone
+        // open and no control to close it.
         .onChange(of: model.body) { _, body in
-            if body != .configured { test.stop() }
+            if body == .unconfigured { test.stop() }
         }
-        .onDisappear {
-            test.stop()
-            // Releases the directory descriptor, its dispatch source and three HAL listeners.
-            // They used to stay installed for the life of the process.
-            model.stopWatching()
-        }
+        .onDisappear { test.stop() }
     }
 
     /// `.showActivity` opens a window, which takes this view's environment; the rest are
@@ -226,8 +222,8 @@ struct BannerRow: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 8)
-            if let title = banner.actionTitle, let action = banner.action {
-                Button(title) { act(action) }
+            if let action = banner.action {
+                Button(action.title) { act(action) }
             }
         }
     }
@@ -250,7 +246,7 @@ struct BannerRow: View {
 }
 
 struct DeviceList: View {
-    @Bindable var model: AppModel
+    let model: AppModel
     @Binding var selection: AudioDeviceID?
 
     var body: some View {
@@ -284,7 +280,7 @@ struct DeviceList: View {
 }
 
 struct DevicePicker: View {
-    @Bindable var model: AppModel
+    let model: AppModel
     let onChoose: (AudioDevice) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var selection: AudioDeviceID?

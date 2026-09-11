@@ -34,119 +34,113 @@ import MicpegUI
 import ServiceManagement
 
 enum Headless {
-    /// Runs the requested operation and never returns if there was one.
     /// The verbs this front end answers to. Membership is checked before anything else
     /// because `runIfRequested()` is called from `App.init()`: treating *any* first argument
     /// as a command meant an argument the system or a launcher injects — Xcode's
     /// `-NSDocumentRevisionsDebugMode`, or `open --args -AppleLanguages '("ko")'`, which the
     /// planned Korean localization makes likely — exited the process with status 2 before a
     /// window existed, with nothing on screen to say why.
-    static let verbs: Set<String> = ["status", "survey", "migrate", "repair", "link", "meter",
-                                     "register", "unregister", "reregister", "activity"]
+    ///
+    /// An enum, so the compiler checks that every verb accepted has an implementation. It was
+    /// a set of strings beside a `switch`, and a `default:` that could only fail at run time.
+    enum Verb: String {
+        case status, survey, migrate, repair, link, meter
+        case register, unregister, reregister
+        case activity
 
+        /// `activity` has nothing to do with registration, so it gets none of the
+        /// SMAppService reporting: two round trips to backgroundtaskmanagementd to print a
+        /// status nobody asked about.
+        var reportsRegistration: Bool { self != .activity }
+
+        /// Whether SMAppService's status is the whole verdict. The stage 3 commands have
+        /// already reported one drawn from more than it, and stage 2 measured that `.enabled`
+        /// can be true of somebody else's agent — theirs must not be overwritten with this.
+        var judgedByStatusAlone: Bool { [.status, .register, .reregister].contains(self) }
+    }
+
+    /// Runs the requested operation and never returns if there was one.
     static func runIfRequested() {
-        guard let command = CommandLine.arguments.dropFirst().first,
-              verbs.contains(command) else { return }
+        guard let argument = CommandLine.arguments.dropFirst().first,
+              let verb = Verb(rawValue: argument) else { return }
 
-        // Nothing to do with registration, so none of the SMAppService reporting below: two
-        // round trips to backgroundtaskmanagementd to print a status nobody asked about.
-        if command == "activity" { exit(runActivity() ? 0 : 1) }
-
-        let service = SMAppService.agent(plistName: AgentController.plistName)
-        report("bundle: \(Bundle.main.bundleURL.path)")
-        report("BundleProgram target: \(AgentController.bundleProgramReport())")
-        report("status before: \(AgentController.describe(service.status))")
+        let service = AgentController.service
+        if verb.reportsRegistration {
+            report("bundle: \(Bundle.main.bundleURL.path)")
+            report("BundleProgram target: \(AgentController.bundleProgramReport())")
+            report("status before: \(AgentController.describe(service.status))")
+        }
 
         var failed = false
-        switch command {
-        case "status":
+        switch verb {
+        case .status:
             break
 
         // MARK: stage 3
 
-        case "survey":
+        case .survey:
             // Read-only. Everything the app can learn without touching anything.
             let survey = InstallSurvey.take()
             report("")
             survey.lines().forEach(report)
             failed = !survey.verdict.isHealthy
 
-        case "migrate":
+        case .migrate:
             // Tear down the legacy LaunchAgent if there is one, then register this bundle.
-            let outcome = Migration.migrate()
-            report("")
-            outcome.lines.forEach(report)
-            failed = !outcome.ok
+            failed = !show(Migration.migrate())
 
-        case "repair":
+        case .repair:
             // unregister() then register(), for a registration that no longer resolves here.
-            let outcome = Migration.repair()
-            report("")
-            outcome.lines.forEach(report)
-            failed = !outcome.ok
+            failed = !show(Migration.repair())
 
-        case "meter":
+        case .meter:
             // Stage 4. The level meter is the only custom-drawn element, and a bar that never
             // moves looks the same as a muted microphone. This prints the numbers behind it.
             let seconds = Double(CommandLine.arguments.dropFirst(2).first ?? "") ?? 5
             failed = !runMeter(seconds: seconds)
 
-        case "link":
+        case .activity:
+            failed = !runActivity()
+
+        case .link:
             // Replace ~/.local/bin/micpeg with a symlink into this bundle. Explicit on
             // purpose: it is the user's file, and the migration only ever offers this.
-            let outcome = Migration.linkCLI()
-            report("")
-            outcome.lines.forEach(report)
-            failed = !outcome.ok
+            failed = !show(Migration.linkCLI())
 
-        case "register":
+        case .register:
             failed = !attempt("register()") { try service.register() }
 
-        case "unregister":
+        case .unregister:
             failed = !attempt("unregister()") { try service.unregister() }
 
-        case "reregister":
+        case .reregister:
             // SMAppService.h: after the executable inside the bundle changes the service
-            // "must be re-registered", and the completion handler is what tells us the old
-            // process is gone and "it is safe to re-register the service".
-            let done = DispatchSemaphore(value: 0)
-            service.unregister { error in
-                if let error {
-                    report("unregister(completionHandler:): \(AgentController.describe(error))")
-                } else {
-                    report("unregister(completionHandler:): no error")
-                }
-                done.signal()
-            }
-            if done.wait(timeout: .now() + 10) == .timedOut {
-                report("unregister(completionHandler:): TIMED OUT after 10s")
+            // "must be re-registered" — after an unregister that has been waited out.
+            let (line, timedOut) = AgentController.unregisterAndWait()
+            report(line)
+            failed = !attempt("register()") { try service.register() } || timedOut
+        }
+
+        if verb.reportsRegistration {
+            // Read the status again rather than inferring it from the call. A register() that
+            // returns without throwing and leaves the service at .requiresApproval is the
+            // silent success CLAUDE.md names as one of this app's failure modes.
+            let after = service.status
+            report("")
+            report("status after:  \(AgentController.describe(after))")
+            if verb.judgedByStatusAlone, after != .enabled {
+                report("NOT ENABLED — launchd will not run the agent in this state.")
                 failed = true
             }
-            failed = !attempt("register()") { try service.register() } || failed
-
-        default:
-            // Unreachable: `verbs` gates the entry. Kept so adding a verb to the set without
-            // adding a case here fails loudly rather than falling through to "status".
-            FileHandle.standardError.write(Data(
-                "MicpegApp: \(command) is in the verb set but has no implementation\n".utf8))
-            exit(2)
-        }
-
-        // Read the status again rather than inferring it from the call. A register() that
-        // returns without throwing and leaves the service at .requiresApproval is the
-        // silent success CLAUDE.md names as one of this app's failure modes.
-        let after = service.status
-        report("")
-        report("status after:  \(AgentController.describe(after))")
-        // The stage 3 commands have already reported a verdict drawn from more than this
-        // status, and stage 2 measured that `.enabled` can be true of somebody else's agent.
-        // Do not overwrite their answer with this one.
-        let judgedBySMAppServiceAlone = ["status", "register", "reregister"].contains(command)
-        if judgedBySMAppServiceAlone, after != .enabled {
-            report("NOT ENABLED — launchd will not run the agent in this state.")
-            failed = true
         }
         exit(failed ? 1 : 0)
+    }
+
+    /// An operation's transcript, after a blank line. True when it reached what it set out to.
+    private static func show(_ outcome: Migration.Outcome) -> Bool {
+        report("")
+        outcome.lines.forEach(report)
+        return outcome.ok
     }
 
     /// Runs the same tap the meter uses and prints a summary rather than a stream, because
@@ -192,10 +186,10 @@ enum Headless {
         return true
     }
 
-    /// The Activity window's rows as text — the same parse, the same time labels, and the
-    /// sentence VoiceOver reads — so the classification can be checked against the real log,
-    /// or against a fixture holding the failure lines no hardware session can be made to
-    /// produce, without a window or a mouse.
+    /// The Activity window's rows as text — the same parse, the same day headers and time
+    /// labels, and the sentence VoiceOver reads — so the classification can be checked against
+    /// the real log, or against a fixture holding the failure lines no hardware session can be
+    /// made to produce, without a window or a mouse.
     ///
     /// Device names appear in the output. Paste shapes and counts into docs/verification.md,
     /// never names.
@@ -206,8 +200,8 @@ enum Headless {
             url = URL(fileURLWithPath: args[flag + 1])
         }
         var target = Copy.noDevice
-        if case .ok(let config) = PinnedConfig.read(), let first = config.priority.first {
-            target = first.name ?? first.uid ?? Copy.noDevice
+        if case .ok(let config) = PinnedConfig.read(), let name = config.targetName {
+            target = name
         }
         let started = Date()
         let rows = ActivityLog.recent(from: url)
@@ -215,20 +209,17 @@ enum Headless {
         report("log: \(url.path)")
         report("\(rows.count) rows, parsed in \(String(format: "%.1f", elapsed)) ms")
         let now = Date()
-        var day = ""
-        for row in rows {
-            let title = ActivityTime.dayTitle(for: row.at, now: now)
-            if title != day {
-                report("")
-                report(title)
-                day = title
+        for day in ActivityTime.days(rows, now: now) {
+            report("")
+            report(day.title)
+            for row in day.entries {
+                let time = ActivityTime.label(for: row.at, now: now)
+                let count = row.count > 1 ? " \(Copy.repeatCount(row.count))" : ""
+                report("  " + time.padding(toLength: 11, withPad: " ", startingAt: 0)
+                     + "\(row.actor)".padding(toLength: 8, withPad: " ", startingAt: 0)
+                     + describe(row.kind) + count)
+                report("               " + Copy.accessibilitySentence(for: row, target: target))
             }
-            let time = ActivityTime.label(for: row.at, now: now)
-            let count = row.count > 1 ? " \(Copy.repeatCount(row.count))" : ""
-            report("  " + time.padding(toLength: 11, withPad: " ", startingAt: 0)
-                 + "\(row.actor)".padding(toLength: 8, withPad: " ", startingAt: 0)
-                 + describe(row.kind) + count)
-            report("               " + Copy.activitySentence(row.kind, target: target))
         }
         return true
     }

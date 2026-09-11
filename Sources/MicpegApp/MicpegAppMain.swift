@@ -26,10 +26,12 @@ struct MicpegSettingsApp: App {
             MainWindow(model: model,
                        onBannerAction: handle(_:),
                        onFirstChoice: enableAfterFirstChoice)
-                .task {
-                    model.startWatching()
-                    await reconcile()
-                }
+                // Both windows start and stop watching side by side, through the pair SwiftUI
+                // guarantees to match. The model counts watchers, and a stop without its start
+                // would take them out from under whichever window is left.
+                .onAppear { model.startWatching() }
+                .onDisappear { model.stopWatching() }
+                .task { await reconcile() }
         }
         .windowResizability(.contentSize)
 
@@ -46,7 +48,7 @@ struct MicpegSettingsApp: App {
                 // its own, not borrowed from the main window: this window can be restored at
                 // launch on its own (`restorationBehavior`, which could say otherwise, is
                 // macOS 15 only), and the model counts watchers, so both holding them is fine.
-                .task {
+                .onAppear {
                     model.startWatching()
                     model.reloadAll()
                 }

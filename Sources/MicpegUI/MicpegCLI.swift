@@ -46,19 +46,25 @@ public struct MicpegCLI: Sendable {
     public func setEnabled(_ on: Bool) -> Result { run([on ? "on" : "off"]) }
 
     private func run(_ arguments: [String]) -> Result {
-        let task = Process()
-        task.executableURL = executable
-        task.arguments = arguments
-        let pipe = Pipe()
-        task.standardOutput = pipe
-        task.standardError = pipe
-        do { try task.run() } catch {
-            return Result(ok: false, output: "could not run \(executable.path): \(error)")
-        }
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        task.waitUntilExit()
-        return Result(ok: task.terminationStatus == 0,
-                      output: String(decoding: data, as: UTF8.self)
-                          .trimmingCharacters(in: .whitespacesAndNewlines))
+        let (status, output) = runTool(executable.path, arguments)
+        return Result(ok: status == 0,
+                      output: output.trimmingCharacters(in: .whitespacesAndNewlines))
     }
+}
+
+/// Run a program to completion: its exit status, and everything it printed on stdout and
+/// stderr together. One copy for the app — the window's CLI calls above and the app target's
+/// `launchctl` — so there is one place that waits on a child process. The daemon keeps its own
+/// (`runTool` in main.swift), since it links nothing from this target.
+public func runTool(_ path: String, _ arguments: [String]) -> (Int32, String) {
+    let task = Process()
+    task.executableURL = URL(fileURLWithPath: path)
+    task.arguments = arguments
+    let pipe = Pipe()
+    task.standardOutput = pipe
+    task.standardError = pipe
+    do { try task.run() } catch { return (-1, "could not run \(path): \(error)") }
+    let data = pipe.fileHandleForReading.readDataToEndOfFile()
+    task.waitUntilExit()
+    return (task.terminationStatus, String(decoding: data, as: UTF8.self))
 }

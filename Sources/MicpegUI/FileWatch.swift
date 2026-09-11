@@ -13,9 +13,9 @@
 // docs/verification.md.
 //
 // **The log is the opposite case, and gets the opposite watch.** The daemon never replaces it:
-// its stderr is opened `O_APPEND` (main.swift:~55) and grows in place, and
-// `truncateLogIfLarge()` cuts it with `truncate(2)` (main.swift:811-817) — the same inode both
-// ways. So the file's own descriptor stays valid, and watching `~/Library/Logs` instead would be
+// its stderr is opened `O_APPEND` (`redirectStderrToLogIfDiscarded()`) and grows in place, and
+// `truncateLogIfLarge()` cuts it with `truncate(2)` — the same inode both ways. So the
+// file's own descriptor stays valid, and watching `~/Library/Logs` instead would be
 // wrong twice over: a directory reports entries being added and removed, not a file inside it
 // growing, and that directory belongs to every program on the machine. The log needs a watch of
 // its own because a failed revert writes a log line and nothing else — no state.json — and the
@@ -45,7 +45,6 @@ public final class PathWatch {
     private let path: URL
     private let mask: DispatchSource.FileSystemEvent
     private var source: DispatchSourceFileSystemObject?
-    private var descriptor: CInt = -1
     private var pollTimer: DispatchSourceTimer?
     private let queue = DispatchQueue(label: "com.micpeg.app.watch")
     private let coalescer: Coalescer
@@ -59,18 +58,15 @@ public final class PathWatch {
         case .directory:    mask = [.write, .delete, .rename]
         case .appendedFile: mask = [.write, .extend, .delete, .rename]
         }
-        self.coalescer = Coalescer(delay: DaemonTiming.coalesce,
-                                   queue: DispatchQueue(label: "com.micpeg.app.watch.coalesce"),
-                                   onFire: onChange)
+        self.coalescer = Coalescer(delay: DaemonTiming.coalesce, onFire: onChange)
         queue.async { [weak self] in self?.attachOrPoll() }
     }
 
     deinit {
         coalescer.cancel()
+        // Its cancel handler closes the descriptor: one is only ever opened to make a source.
         source?.cancel()
         pollTimer?.cancel()
-        // The cancel handler closes `descriptor`; if no source was ever created, close it here.
-        if source == nil && descriptor >= 0 { close(descriptor) }
     }
 
     // MARK: - Attaching
@@ -85,7 +81,6 @@ public final class PathWatch {
             startPolling()
             return
         }
-        descriptor = fd
         let s = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd, eventMask: mask,
                                                           queue: queue)
         s.setEventHandler { [weak self] in
@@ -106,7 +101,6 @@ public final class PathWatch {
     private func reattach() {
         source?.cancel()
         source = nil
-        descriptor = -1
         queue.asyncAfter(deadline: .now() + 0.2) { [weak self] in self?.attachOrPoll() }
     }
 

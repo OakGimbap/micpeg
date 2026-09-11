@@ -192,6 +192,16 @@ public enum Copy {
         }
     }
 
+    /// A row as VoiceOver reads it — on screen the row is a badge and a device moving, so this
+    /// is the one place its words have to be complete — and as `MicpegApp activity` prints it.
+    /// The repeat count is a sentence of its own: the row appends the time next, and "3 times
+    /// 39 min ago" read as one run-on phrase through the accessibility API.
+    public static func accessibilitySentence(for activity: Activity, target: String) -> String {
+        let sentence = activitySentence(activity.kind, target: target)
+        guard activity.count > 1 else { return sentence }
+        return "\(sentence) \(repeatCountSpoken(activity.count))."
+    }
+
     /// The daemon's failures, in the user's terms. `OSStatus` values and four-character codes
     /// stay in `Activity.raw` — app-ui.md keeps them out of the window.
     public static func problem(_ problem: Activity.Problem) -> String {

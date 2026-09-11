@@ -65,14 +65,9 @@ struct JobState {
     let runningExecutable: URL?
     let managedBy: String?
     let lastExitCode: String?
-    let raw: String
 
     static let none = JobState(present: false, pid: nil, runningExecutable: nil,
-                               managedBy: nil, lastExitCode: nil, raw: "")
-
-    var managedByServiceManagement: Bool {
-        managedBy?.contains("ServiceManagement") ?? false
-    }
+                               managedBy: nil, lastExitCode: nil)
 }
 
 struct InstallSurvey {
@@ -166,14 +161,13 @@ struct InstallSurvey {
 
     // MARK: - Taking the survey
 
-    static let legacyPlistName = "com.micpeg.agent.plist"
-    static let label = "com.micpeg.agent"
-    static var serviceTarget: String { "gui/\(getuid())/\(label)" }
+    static var serviceTarget: String { "gui/\(getuid())/\(AgentController.label)" }
 
     static func take() -> InstallSurvey {
-        let home = FileManager.default.homeDirectoryForCurrentUser
+        let home = DaemonPaths.home
         let bundle = Bundle.main.bundleURL
-        let plist = home.appendingPathComponent("Library/LaunchAgents/\(legacyPlistName)")
+        let plist = home.appendingPathComponent("Library/LaunchAgents/\(AgentController.plistName)")
+        let cliPath = home.appendingPathComponent(".local/bin/micpeg")
         let fm = FileManager.default
 
         var program: String?
@@ -195,9 +189,9 @@ struct InstallSurvey {
             legacyProgram: program,
             legacyAPIStatus: SMAppService.statusForLegacyPlist(at: plist),
             job: readJob(),
-            serviceStatus: SMAppService.agent(plistName: AgentController.plistName).status,
-            cli: readCLI(at: home.appendingPathComponent(".local/bin/micpeg")),
-            cliPath: home.appendingPathComponent(".local/bin/micpeg"),
+            serviceStatus: AgentController.service.status,
+            cli: readCLI(at: cliPath),
+            cliPath: cliPath,
             stateUpdated: updated,
             registeredFrom: RegistrationRecord.read())
     }
@@ -224,7 +218,7 @@ struct InstallSurvey {
     }
 
     private static func readJob() -> JobState {
-        let (status, out) = run("/bin/launchctl", ["print", serviceTarget])
+        let (status, out) = runTool("/bin/launchctl", ["print", serviceTarget])
         guard status == 0 else { return .none }
 
         func field(_ name: String) -> String? {
@@ -242,8 +236,7 @@ struct InstallSurvey {
                         pid: pid,
                         runningExecutable: pid.flatMap(executablePath(ofPID:)),
                         managedBy: field("managed_by"),
-                        lastExitCode: field("last exit code"),
-                        raw: out)
+                        lastExitCode: field("last exit code"))
     }
 
     /// The absolute path a running process was executed from.
@@ -254,20 +247,6 @@ struct InstallSurvey {
         var buffer = [CChar](repeating: 0, count: 4096)  // PROC_PIDPATHINFO_MAXSIZE
         guard proc_pidpath(pid, &buffer, UInt32(buffer.count)) > 0 else { return nil }
         return URL(fileURLWithPath: String(cString: buffer)).resolvingSymlinksInPath()
-    }
-
-    @discardableResult
-    static func run(_ path: String, _ arguments: [String]) -> (Int32, String) {
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: path)
-        task.arguments = arguments
-        let pipe = Pipe()
-        task.standardOutput = pipe
-        task.standardError = pipe
-        do { try task.run() } catch { return (-1, "\(error)") }
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        task.waitUntilExit()
-        return (task.terminationStatus, String(decoding: data, as: UTF8.self))
     }
 
     // MARK: - Reporting
@@ -293,11 +272,11 @@ struct InstallSurvey {
         }
         out.append("SMAppService:      \(AgentController.describe(serviceStatus))")
         out.append("CLI on PATH:       \(cli.description) — \(cliPath.path)")
-        out.append("state.json:        \(stateUpdated.map { Self.stamp.string(from: $0) } ?? "never written")")
+        out.append("state.json:        \(stateUpdated.map { DaemonState.stamp.string(from: $0) } ?? "never written")")
         if let recorded = registeredFrom {
             out.append("registered from:   \(recorded.bundlePath)"
                        + (hasMoved ? "   — NOT where this app is now" : "")
-                       + (recorded.at.map { ", at \(Self.stamp.string(from: $0))" } ?? ""))
+                       + (recorded.at.map { ", at \(DaemonState.stamp.string(from: $0))" } ?? ""))
         } else {
             out.append("registered from:   (no record — this app has not registered on this"
                        + " machine, or the preference was cleared. Absence proves nothing.)")
@@ -317,10 +296,4 @@ struct InstallSurvey {
         case .notRegistered:    return "NOT REGISTERED"
         }
     }
-
-    static let stamp: DateFormatter = {
-        let f = DateFormatter()
-        f.dateFormat = "yyyy-MM-dd HH:mm:ss"
-        return f
-    }()
 }

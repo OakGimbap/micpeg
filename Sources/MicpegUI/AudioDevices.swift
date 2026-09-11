@@ -89,12 +89,6 @@ public enum AudioSnapshot {
         guard status == noErr, id != 0 else { return nil }
         return device(id)
     }
-
-    /// The transport codes a set of configured names refers to, resolved once when the config
-    /// is read rather than per device per redraw.
-    public static func transportCodes(named names: [String]) -> Set<UInt32> {
-        Set(names.compactMap(transportCode(_:)))
-    }
 }
 
 /// The three HAL properties the window cares about, watched only while it is on screen.
@@ -108,9 +102,7 @@ public final class DeviceWatch {
     private let coalescer: Coalescer
 
     public init(onChange: @escaping @MainActor () -> Void) {
-        self.coalescer = Coalescer(delay: DaemonTiming.coalesce,
-                                   queue: DispatchQueue(label: "com.micpeg.app.devices.coalesce"),
-                                   onFire: onChange)
+        self.coalescer = Coalescer(delay: DaemonTiming.coalesce, onFire: onChange)
         // dev# — devices appearing and disappearing.
         // dIn  — the default input moving, which is the event the whole program exists for.
         // dOut — the default output moving, which the window displays.
@@ -141,7 +133,4 @@ public final class DeviceWatch {
         }
         installed.append((address, block))
     }
-
-    /// One redraw per burst. A revert moves the default input twice, roughly 400 ms apart —
-    /// the daemon's 300 ms debounce plus its re-verify — and the window should settle once.
 }
