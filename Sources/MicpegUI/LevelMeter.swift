@@ -18,6 +18,8 @@
 
 import SwiftUI
 
+// `@MainActor` for the reason MainWindow gives.
+@MainActor
 public struct LevelMeter: View {
     private let test: InputTest
     @Environment(\.accessibilityReduceMotion) private var reduceMotion

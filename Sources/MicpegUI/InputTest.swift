@@ -161,7 +161,11 @@ public final class InputTest {
             ) { [weak self] _ in
                 // Do nothing here. The header is explicit that tearing the engine down inside
                 // this callback can deadlock, because it arrives on an internal dispatch queue.
-                Task { @MainActor in self?.restart.schedule() }
+                //
+                // The task's own capture list copies the weak reference. Naming the outer `self`
+                // inside the task instead reads a captured `var` from concurrently executing
+                // code, which Swift 5.10 rejects — CI's toolchain; the local one did not.
+                Task { @MainActor [weak self] in self?.restart.schedule() }
             }
         }
 

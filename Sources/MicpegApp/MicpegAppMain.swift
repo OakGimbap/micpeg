@@ -11,7 +11,12 @@ import MicpegUI
 import ServiceManagement
 import SwiftUI
 
+// `@MainActor`, and AppDelegate below, for the reason MainWindow gives. Here it is
+// `@State private var model = AppModel()`: a main-actor initializer in a property initializer,
+// which the Swift 5.10 in CI rejects in an unmarked type — it rejected MainWindow's `InputTest()`
+// the same way.
 @main
+@MainActor
 struct MicpegSettingsApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @State private var model = AppModel()
@@ -212,6 +217,7 @@ struct MicpegSettingsApp: App {
 /// docs/app-design.md, "Process model": quitting the app must never look like it stops the
 /// feature, and there is nothing for the GUI to do once its window is gone. launchd holds the
 /// daemon.
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Tabbing is the other way a Mac app grows windows: View ▸ Show Tab Bar, and Window ▸ Merge
     /// All Windows, which would fold the main and Activity windows into one frame of two sizes.

@@ -15,6 +15,8 @@
 import AppKit
 import SwiftUI
 
+// `@MainActor` on each view in this file, for the reason MainWindow gives.
+@MainActor
 public struct SettingsWindow: View {
     /// Launches the app again and quits this copy, or says why it could not. It belongs to the
     /// app target, as registration does: MicpegUI draws, and does not decide the process's life.
@@ -162,6 +164,7 @@ enum About {
 /// The file's paragraphs are hard-wrapped at about 78 columns, and shown as they are in a
 /// narrower sheet each of those lines would wrap again partway along. So each paragraph is
 /// joined into one line and wrapped to the sheet instead. The words are the file's.
+@MainActor
 struct LicenseSheet: View {
     let text: String
     @Environment(\.dismiss) private var dismiss

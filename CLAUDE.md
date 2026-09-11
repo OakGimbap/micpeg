@@ -28,6 +28,11 @@ touching the app.
   README's "macOS 12 (Monterey) or later" false**, including for the source build in
   `scripts/install.sh` — the README fix is stage 5. See `docs/app-design.md`.
 - Verified on real hardware only on macOS 26.
+- CI (`.github/workflows/ci.yml`, `macos-14`) builds with Xcode 15.3 — Swift 5.10 and the
+  macOS 14 SDK — which is older than the local toolchain and stricter where SwiftUI's isolation
+  changed: the macOS 14 SDK isolates only a view's `body` to the main actor. The first time
+  `settings-app` reached CI, it failed to compile code the local toolchain had accepted without
+  a warning. **A green local build is not a green CI build.**
 
 ## Architecture principles
 
@@ -81,6 +86,9 @@ translated log line is one `ActivityLog` cannot parse.
   test that failed. The existing comments are the model: they name the incident that produced
   the code.
 - Prefer bounded retries over unbounded polling; an unbounded retry breaks principle 2.
+- Mark every SwiftUI view `@MainActor`. The macOS 15 SDK declares `View` main-actor isolated
+  and the macOS 14 SDK that CI builds against does not, so an unmarked view's helpers that read
+  `AppModel` or `InputTest` compile locally and fail in CI.
 - In the app, prefer the standard SwiftUI container over custom layout every time. See
   [`docs/app-ui.md`](docs/app-ui.md) — and read Apple's current documentation rather than
   trusting that file's recollection of an API.

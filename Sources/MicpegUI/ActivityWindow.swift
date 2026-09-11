@@ -17,6 +17,8 @@
 import CoreAudio
 import SwiftUI
 
+// `@MainActor` on each view in this file, for the reason MainWindow gives.
+@MainActor
 public struct ActivityWindow: View {
     public static let sceneID = "activity"
 
@@ -95,6 +97,7 @@ public enum ActivityTime {
     }
 }
 
+@MainActor
 struct ActivityRow: View {
     let entry: Activity
     let now: Date
@@ -217,6 +220,7 @@ struct ActivityRow: View {
 }
 
 /// A microphone: what kind of device it is, then its name.
+@MainActor
 struct DeviceChip: View {
     let device: Activity.Device
     let model: AppModel
