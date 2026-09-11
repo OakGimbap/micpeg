@@ -31,6 +31,7 @@ public struct MainWindow: View {
     private let onFirstChoice: () -> Void
 
     @State private var showingPicker = false
+    @State private var showEarlier = false
     @State private var errorMessage: String?
     @State private var test: InputTest
 
@@ -68,14 +69,15 @@ public struct MainWindow: View {
             }
         }
         .formStyle(.grouped)
-        // A Form on macOS is a scroll view, so with .windowResizability(.contentSize) the
-        // window took a default height and scrolled its own content — measured: a 460x586
-        // window with scrollbar arrows in the accessibility tree and the action buttons below
-        // the fold, where VoiceOver could not reach their labels either. Disabling scrolling
-        // lets the window size to the content, which is what app-ui.md asks for: "Fixed to its
-        // content size; there is nothing to resize."
-        .scrollDisabled(true)
+        // Deliberately *not* .scrollDisabled(true). That was tried, on the theory that a Form
+        // would then size the window to its content; measured, it does not — the window stays
+        // at the same 460x586 and the content past the bottom edge is simply cut off. The
+        // action buttons were still in the accessibility tree, which is how the first pass
+        // missed it, and not on screen, which is what a screenshot showed. Scrolling is the
+        // safety net; keeping the content short enough not to need it is the design, and
+        // `.windowResizability(.contentSize)` still means there is nothing to resize.
         .frame(width: 460)
+        .fixedSize(horizontal: false, vertical: true)
         .sheet(isPresented: $showingPicker) {
             DevicePicker(model: model) { device in
                 Task { errorMessage = await model.pick(device) }
@@ -178,19 +180,22 @@ public struct MainWindow: View {
             }
         }
 
+        // app-ui.md's skeleton: "activity — most recent daemon action, expandable". One row.
+        // Rendering five was a misreading of that line and it had a visible cost: the section
+        // grew tall enough to push the only two controls in the window off the bottom edge.
         Section(Copy.activityTitle) {
-            if model.activity.isEmpty {
-                Text(Copy.activityEmpty).foregroundStyle(.secondary)
-            } else {
-                ForEach(model.activity.prefix(5)) { entry in
-                    LabeledContent {
-                        Text(entry.at, style: .relative)
-                            .foregroundStyle(.secondary)
-                            .monospacedDigit()
-                    } label: {
-                        Text(model.sentence(for: entry))
+            if let latest = model.activity.first {
+                activityRow(latest)
+                if model.activity.count > 1 {
+                    // An explicit binding rather than DisclosureGroup's own state: it is the
+                    // one thing in this window that changes its height, so whether it is open
+                    // has to be inspectable to test that the window grows instead of clipping.
+                    DisclosureGroup(Copy.activityEarlier, isExpanded: $showEarlier) {
+                        ForEach(model.activity.dropFirst().prefix(9)) { activityRow($0) }
                     }
                 }
+            } else {
+                Text(Copy.activityEmpty).foregroundStyle(.secondary)
             }
         }
 
@@ -202,6 +207,16 @@ public struct MainWindow: View {
                     Task { errorMessage = await model.setPaused(!model.isPaused) }
                 }
             }
+        }
+    }
+
+    private func activityRow(_ entry: Activity) -> some View {
+        LabeledContent {
+            Text(entry.at, style: .relative)
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+        } label: {
+            Text(model.sentence(for: entry))
         }
     }
 }
@@ -295,6 +310,11 @@ struct DevicePicker: View {
             }
             .listStyle(.inset)
             .frame(height: 180)
+            // Open on whatever is kept right now. Without this the sheet showed two empty
+            // radio buttons and the user could not tell which microphone they already had —
+            // and Done stayed disabled until they picked one, so "change my mind" meant
+            // Cancel rather than seeing the current choice and leaving it alone.
+            .task { selection = selection ?? model.pinnedDevice?.id ?? model.currentInput?.id }
             Text(Copy.deviceListFooter)
                 .font(.caption)
                 .foregroundStyle(.secondary)
