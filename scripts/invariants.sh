@@ -77,6 +77,13 @@ absent "the daemon never names the default output" \
        "DefaultOutputDevice" \
        Sources/micpeg Sources/MicpegAudio
 
+# The pattern above does not match its sibling — `DefaultSystemOutputDevice` is
+# Default·System·OutputDevice — and README names both. Nothing needs the system output, the
+# window included.
+absent "nothing names the default system output" \
+       "DefaultSystemOutputDevice" \
+       Sources/micpeg Sources/MicpegAudio Sources/MicpegApp Sources/MicpegUI
+
 # Keeps "the background agent never opens the microphone" literally true now that the
 # app has a level meter.
 # The pattern is `AVF`, not `AVFoundation`: the app's own capture code imports **AVFAudio**,
@@ -85,6 +92,31 @@ absent "the daemon never names the default output" \
 absent "the daemon cannot open an audio stream" \
        "AVF" \
        Sources/micpeg Sources/MicpegAudio
+
+# AVFAudio is one way to open a stream, not the only one, and a list of forbidden names is only
+# as good as the names someone thought of. AudioToolbox's AudioQueue and an AUHAL audio unit
+# both capture, and neither says `AVF`. So the daemon's imports are checked as an allowlist —
+# CLAUDE.md: "The daemon links CoreAudio + Foundation only" — and a planted
+# `import AudioToolbox` fails it where the `AVF` check above let it through.
+import_scope=$(scope_of Sources/micpeg Sources/MicpegAudio)
+imports=$(code_lines 'import ' Sources/micpeg Sources/MicpegAudio \
+    | grep -E '^[^:]*:[0-9]+:[[:space:]]*(@[A-Za-z_]+[[:space:]]+)*import[[:space:]]' \
+    | grep -v -E '^[^:]*:[0-9]+:import (CoreAudio|Darwin|Foundation|MicpegAudio)[[:space:]]*$')
+if [ -n "$imports" ]; then
+    printf '%s\n' "$imports"
+    echo "FAIL: the daemon imports only CoreAudio, Darwin, Foundation and MicpegAudio —$import_scope"
+    fail=1
+else
+    echo "ok:   the daemon imports only CoreAudio, Darwin, Foundation and MicpegAudio —$import_scope"
+fi
+
+# CoreAudio itself can capture, through an IOProc on the device, and it is the one framework the
+# daemon has to import — so the allowlist cannot see this. A planted
+# AudioDeviceCreateIOProcIDWithBlock passed every check above.
+for api in AudioDeviceCreateIOProc AudioDeviceStart; do
+    absent "the daemon cannot open an audio stream ($api)" "$api" \
+           Sources/micpeg Sources/MicpegAudio
+done
 
 # Stage 2 measured that `sfltool dumpbtm` demands system.privilege.admin and that authd
 # caches nothing, so every invocation is one more password dialog — 26 of them in a single
@@ -110,6 +142,18 @@ absent "the app writes no file contents" \
 absent "the app creates no files" \
        "createFile" \
        Sources/MicpegApp Sources/MicpegUI
+
+# Writing is not the only way to change a file. These are the other FileManager and Foundation
+# calls that copy, move, link, create or delete one — none of them appeared in the two checks
+# above, so a planted `removeItem` or `copyItem` passed. The app deletes exactly one file in its
+# life, the legacy plist, and that deletion is checked below, once `only_in` exists. `\.moveItem`
+# because the bare word is inside `removeItem`, and the first run of this loop failed on the one
+# deletion it was written to allow.
+for api in copyItem '\.moveItem' replaceItem linkItem createSymbolicLink createDirectory \
+           trashItem 'write(toFile' 'FileHandle(forWriting' 'FileHandle(forUpdating' 'unlink('; do
+    absent "the app changes no files ($(printf '%s' "$api" | tr -d '\\'))" "$api" \
+           Sources/MicpegApp Sources/MicpegUI
+done
 
 # only_in <label> <allowed> <pattern> <dir>...
 #
@@ -148,6 +192,12 @@ for store in UserDefaults AppStorage SceneStorage CFPreferences; do
             "$stores" "$store" \
             Sources/MicpegApp Sources/MicpegUI
 done
+
+# The one file the app deletes: the legacy plist, during migration (Migration.swift, and
+# app-design.md's migration flow). Anywhere else, a deletion is a bug.
+only_in "only Migration.swift deletes a file" \
+        'Sources/MicpegApp/Migration\.swift' "removeItem" \
+        Sources/MicpegApp Sources/MicpegUI
 
 # The bundle templates carry two mistakes that assemble and sign without complaint.
 #
