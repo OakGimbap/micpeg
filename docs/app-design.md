@@ -202,8 +202,8 @@ The daemon therefore opens the log itself. `redirectStderrToLogIfDiscarded()` po
 `~/Library/Logs/micpeg.log` when, and only when, fd 2 is `/dev/null` — which is exactly what
 launchd hands a job with no redirect, and is not what a shell, a pipe or a user's own
 `2>somewhere` looks like. It is the only change stage 2 made to the daemon, and it is the
-reason `tail -f ~/Library/Logs/micpeg.log` still works and the "recent activity" panel below
-has something to read.
+reason `tail -f ~/Library/Logs/micpeg.log` still works and the Activity window has something to
+read.
 
 ### The label stays `com.micpeg.agent`
 
@@ -317,7 +317,7 @@ Reads and writes take different routes, and the asymmetry is deliberate.
 | Is anything configured at all | `~/.config/micpeg/config.json`, **read only** |
 | Live changes | The app registers its own listeners while the window is visible |
 | Daemon state | `~/.config/micpeg/state.json`, watched |
-| Recent activity | `~/Library/Logs/micpeg.log`, tail-parsed |
+| Activity | `~/Library/Logs/micpeg.log`, parsed whole (the daemon truncates it past 256 KB) and watched by its own descriptor — it is appended in place, where `state.json` is replaced |
 | **Every mutation** | `Process` → `Contents/MacOS/micpeg` |
 
 The app cannot write to CoreAudio because the invariant forbids it and CI enforces it. That

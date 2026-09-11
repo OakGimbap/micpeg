@@ -45,6 +45,9 @@ public enum Copy {
         "You chose \(chosen), so \(target) is not being restored. Choosing \(target) again "
         + "resumes it."
     }
+    public static func notInUseSummary(_ device: String) -> String {
+        "\(device) is connected, but another microphone is in use."
+    }
     public static let pausedSummary = "Micpeg is paused. Your microphone can change freely."
     public static let unconfiguredSummary = "No microphone is chosen yet."
     public static let settingsUnreadableSummary =
@@ -88,6 +91,12 @@ public enum Copy {
         + "leave nothing to do."
     }
 
+    public static let restoreFailedTitle = "Your microphone couldn't be switched back"
+    public static func restoreFailedBody(_ device: String) -> String {
+        "Micpeg tried to select \(device), and macOS didn't accept the change."
+    }
+    public static let showActivity = "Show Activity"
+
     public static let configUnreadableTitle = "Micpeg's settings file can't be read"
     public static let configUnreadableBody =
         "The background helper is still using the settings it loaded last. Fix or remove the "
@@ -119,23 +128,69 @@ public enum Copy {
 
     // MARK: Activity
 
-    public static let activityTitle = "Recent activity"
-    public static let activityEmpty = "Nothing yet."
-    public static let activityEarlier = "Earlier"
-    public static func restored(to device: String, displacing other: String?) -> String {
-        if let other { return "Moved your microphone back to \(device) from \(other)." }
-        return "Moved your microphone back to \(device)."
+    public static let activityWindowTitle = "Activity"
+    public static let activityEmpty = "Nothing Yet"
+    public static let activityEmptyDetail = "When your microphone changes, it appears here."
+    public static let today = "Today"
+    public static let yesterday = "Yesterday"
+    /// Under a minute. Seconds are never shown: a timestamp that changes every second is noise
+    /// in a list the user reads once.
+    public static let justNow = "Just now"
+    public static func minutesAgo(_ minutes: Int) -> String { "\(minutes) min ago" }
+    public static func repeatCount(_ count: Int) -> String { "×\(count)" }
+    public static func repeatCountSpoken(_ count: Int) -> String { "\(count) times" }
+
+    /// Visible labels for the rows whose picture is not a microphone moving. Two or three
+    /// words: the badge and the device beside it say the rest.
+    public static let pausedLabel = "Paused"
+    public static let resumedLabel = "Resumed"
+    public static let startedLabel = "Started"
+    public static let reconnectedLabel = "Reconnected"
+    public static let backInUseLabel = "Back in use"
+    public static let disconnectedLabel = "Disconnected"
+    public static let backedOffLabel = "Stopped competing"
+    public static func problemLabel(_ problem: Activity.Problem) -> String {
+        switch problem {
+        case .restoreFailed:      return "Couldn't switch back"
+        case .audioSystemLost:    return "Lost the audio system"
+        case .statusNotSaved:     return "Status not saved"
+        case .settingsUnreadable: return "Settings unreadable"
+        }
     }
-    public static func steppedAside(to device: String) -> String {
-        "You chose \(device), so Micpeg stepped aside."
+
+    /// The whole row as one sentence, for VoiceOver. On screen the row is a picture — who
+    /// acted, and which microphone moved where — and this is what that picture says. `target`
+    /// names the kept microphone for the rows whose log line names no device.
+    public static func activitySentence(_ kind: Activity.Kind, target: String) -> String {
+        switch kind {
+        case .restored(let to, let from?):
+            return "Moved your microphone back to \(to.name) from \(from.name)."
+        case .restored(let to, .none):
+            return "Moved your microphone back to \(to.name)."
+        case .chose(let to, _):
+            return "You chose \(to?.name ?? target) in Micpeg."
+        case .switchedAway(let to):
+            return "You switched to \(to.name), so Micpeg stepped aside."
+        case .switchedBack:
+            return "You switched back to \(target)."
+        case .paused:
+            return "You paused Micpeg."
+        case .resumed(let to, _):
+            return "You resumed Micpeg, and \(to?.name ?? target) is your microphone again."
+        case .started:
+            return "Micpeg started."
+        case .reconnected:
+            return "\(target) is connected again."
+        case .backInUse:
+            return "The microphone you switched to went away, so \(target) is back in use."
+        case .disconnected:
+            return "\(target) isn't connected."
+        case .backedOff:
+            return "Stopped competing with another program over the microphone."
+        case .problem(let problem):
+            return self.problem(problem)
+        }
     }
-    public static let resumedActivity = "Your chosen microphone is back in use."
-    public static func pinnedActivity(_ device: String) -> String {
-        "Selected \(device)."
-    }
-    public static let targetMissingActivity = "Your chosen microphone isn't connected."
-    public static let backedOffActivity =
-        "Stopped competing with another program over the microphone."
 
     /// The daemon's failures, in the user's terms. `OSStatus` values and four-character codes
     /// stay in `Activity.raw` — app-ui.md keeps them out of the window.

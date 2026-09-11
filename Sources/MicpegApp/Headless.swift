@@ -10,6 +10,7 @@
 //   Micpeg.app/Contents/MacOS/MicpegApp register | unregister | reregister
 //   Micpeg.app/Contents/MacOS/MicpegApp survey | migrate | repair | link
 //   Micpeg.app/Contents/MacOS/MicpegApp meter [seconds]
+//   Micpeg.app/Contents/MacOS/MicpegApp activity [--log <path>]
 //
 // The second line is stage 2's: raw SMAppService calls, nothing else. The third is stage 3's
 // and answers a different question — not "what did ServiceManagement return" but "what is
@@ -28,6 +29,7 @@
 // into docs/verification.md and run again is worth more than one that needs a mouse.
 
 import Foundation
+import MicpegAudio
 import MicpegUI
 import ServiceManagement
 
@@ -40,11 +42,15 @@ enum Headless {
     /// planned Korean localization makes likely — exited the process with status 2 before a
     /// window existed, with nothing on screen to say why.
     static let verbs: Set<String> = ["status", "survey", "migrate", "repair", "link", "meter",
-                                     "register", "unregister", "reregister"]
+                                     "register", "unregister", "reregister", "activity"]
 
     static func runIfRequested() {
         guard let command = CommandLine.arguments.dropFirst().first,
               verbs.contains(command) else { return }
+
+        // Nothing to do with registration, so none of the SMAppService reporting below: two
+        // round trips to backgroundtaskmanagementd to print a status nobody asked about.
+        if command == "activity" { exit(runActivity() ? 0 : 1) }
 
         let service = SMAppService.agent(plistName: AgentController.plistName)
         report("bundle: \(Bundle.main.bundleURL.path)")
@@ -184,6 +190,68 @@ enum Headless {
                : "everything is at or below the meter's \(InputTest.floorDB) dBFS floor — the"
                  + " window would say \"No sound is reaching this microphone\"")
         return true
+    }
+
+    /// The Activity window's rows as text — the same parse, the same time labels, and the
+    /// sentence VoiceOver reads — so the classification can be checked against the real log,
+    /// or against a fixture holding the failure lines no hardware session can be made to
+    /// produce, without a window or a mouse.
+    ///
+    /// Device names appear in the output. Paste shapes and counts into docs/verification.md,
+    /// never names.
+    private static func runActivity() -> Bool {
+        let args = Array(CommandLine.arguments.dropFirst(2))
+        var url = DaemonPaths.log
+        if let flag = args.firstIndex(of: "--log"), flag + 1 < args.count {
+            url = URL(fileURLWithPath: args[flag + 1])
+        }
+        var target = Copy.noDevice
+        if case .ok(let config) = PinnedConfig.read(), let first = config.priority.first {
+            target = first.name ?? first.uid ?? Copy.noDevice
+        }
+        let started = Date()
+        let rows = ActivityLog.recent(from: url)
+        let elapsed = Date().timeIntervalSince(started) * 1000
+        report("log: \(url.path)")
+        report("\(rows.count) rows, parsed in \(String(format: "%.1f", elapsed)) ms")
+        let now = Date()
+        var day = ""
+        for row in rows {
+            let title = ActivityTime.dayTitle(for: row.at, now: now)
+            if title != day {
+                report("")
+                report(title)
+                day = title
+            }
+            let time = ActivityTime.label(for: row.at, now: now)
+            let count = row.count > 1 ? " \(Copy.repeatCount(row.count))" : ""
+            report("  " + time.padding(toLength: 11, withPad: " ", startingAt: 0)
+                 + "\(row.actor)".padding(toLength: 8, withPad: " ", startingAt: 0)
+                 + describe(row.kind) + count)
+            report("               " + Copy.activitySentence(row.kind, target: target))
+        }
+        return true
+    }
+
+    private static func describe(_ kind: Activity.Kind) -> String {
+        func name(_ device: Activity.Device?) -> String {
+            guard let device else { return "·" }
+            return device.name + (device.transport.map { " [\(fourCC($0))]" } ?? "")
+        }
+        switch kind {
+        case .restored(let to, let from): return "restored     \(name(from)) → \(name(to))"
+        case .chose(let to, let from):    return "chose        \(name(from)) → \(name(to))"
+        case .switchedAway(let to):       return "switchedAway → \(name(to))"
+        case .switchedBack:               return "switchedBack"
+        case .paused:                     return "paused"
+        case .resumed(let to, let from):  return "resumed      \(name(from)) → \(name(to))"
+        case .started:                    return "started"
+        case .reconnected:                return "reconnected"
+        case .backInUse:                  return "backInUse"
+        case .disconnected:               return "disconnected"
+        case .backedOff:                  return "backedOff"
+        case .problem(let problem):       return "problem      \(problem)"
+        }
     }
 
     private static func attempt(_ label: String, _ body: () throws -> Void) -> Bool {

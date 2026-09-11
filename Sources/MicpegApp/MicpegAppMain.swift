@@ -32,6 +32,31 @@ struct MicpegSettingsApp: App {
                 }
         }
         .windowResizability(.contentSize)
+
+        // After the WindowGroup, so the group stays the scene that opens at launch. A singleton
+        // `Window` is listed in the Window menu by SwiftUI itself (Apple's `Window`
+        // documentation), so there is no CommandGroup for it.
+        //
+        // Sized by the user, not by its content: a list that grows as events arrive must never
+        // drag its window's frame along, which is what the main window's `.contentSize` did to
+        // the disclosure this replaces.
+        Window(Copy.activityWindowTitle, id: ActivityWindow.sceneID) {
+            ActivityWindow(model: model)
+                // Here rather than in the view, so a preview of the view attaches nothing. And
+                // its own, not borrowed from the main window: this window can be restored at
+                // launch on its own (`restorationBehavior`, which could say otherwise, is
+                // macOS 15 only), and the model counts watchers, so both holding them is fine.
+                .task {
+                    model.startWatching()
+                    model.reloadAll()
+                }
+                .onDisappear { model.stopWatching() }
+        }
+        // Wider than the main window: at 460 a row naming two devices truncated the first
+        // ("MacBook P…Microphone") beside a clock time, seen in the first screenshot.
+        .defaultSize(width: 560, height: 600)
+        .windowResizability(.contentMinSize)
+        .keyboardShortcut("l", modifiers: [.command, .option])
     }
 
     // MARK: - Agent ↔ window
@@ -119,6 +144,10 @@ struct MicpegSettingsApp: App {
             run { Migration.repair() }
         case .migrateLegacy:
             run { Migration.migrate() }
+        case .showActivity:
+            // MainWindow opens it itself: opening a window takes a view's environment, which
+            // this App-level handler does not have.
+            break
         }
     }
 

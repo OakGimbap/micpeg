@@ -65,6 +65,9 @@ One window. `WindowGroup`, not `Settings` — this is the app's main window, not
 pane. Fixed to its content size (`.windowResizability(.contentSize)`); there is nothing to
 resize.
 
+The Activity window is the one other window, and the reason it is separate is this rule: see
+[Activity](#activity).
+
 Follow the HIG's macOS window margins rather than inventing spacing. Let `Form` supply the
 inner rhythm; do not add manual padding between its rows.
 
@@ -89,9 +92,12 @@ header      app name + status
 banner      absent when healthy; expands for every exception
 body        Output / Input rows, or the device list when unconfigured
 meter       level + test control
-activity    most recent daemon action, expandable
 actions     Change Microphone · pause
 ```
+
+Activity is not in the skeleton. It was, as a disclosure under the meter, and it was the only
+element able to change the window's height; with the window sized to its content, expanding it
+resized the window itself. It has its own window now — see [Activity](#activity).
 
 ### Unconfigured
 
@@ -143,11 +149,6 @@ that notification reads as something installing itself behind the user's back.
 │                                            │
 │   ┌──────────────────────────────────────┐ │
 │   │  ▁▂▅█▇▄▂▁▁▂▆█▅▃▁    [ Test Microphone ]│
-│   └──────────────────────────────────────┘ │
-│                                            │
-│   ┌──────────────────────────────────────┐ │
-│   │  2:14 PM  Reverted a switch to      ⌄│ │
-│   │           AirPods Pro                │ │
 │   └──────────────────────────────────────┘ │
 │                                            │
 │              [ Change Microphone ]   [ ⏸ ] │
@@ -208,6 +209,55 @@ Informational styling, secondary color. No red, no warning symbol.
 The button opens System Settings directly. Telling a user to "go to System Settings" without
 taking them there is where this flow usually dies.
 
+## Activity
+
+What happened to the microphone, in a window of its own: Window ▸ Activity (⌥⌘L), and the
+**Show Activity** button on the banner that reports a failed restore. Sized by the user
+(`.windowResizability(.contentMinSize)`); the list scrolls, and nothing in it can move its own
+frame. [`verification.md`](verification.md) §23 has the measurements that moved it out of the
+main window.
+
+### A row is a picture
+
+```
+Today
+  ↺  AirPods Pro → Elgato Wave:1                      Just now
+  ●  MacBook Pro Microphone → Elgato Wave:1         12 min ago
+  ●  → MacBook Pro Microphone                       13 min ago
+  ▶  Resumed → Elgato Wave:1                          10:14 AM
+  ⏸  Paused                                           10:12 AM
+Yesterday
+  ⚠  Couldn't switch back                             11:40 PM
+  ⏻  Started  Elgato Wave:1  ×3                       11:02 PM
+```
+
+- **The badge says who acted.** Tinted `arrow.uturn.backward.circle.fill` is Micpeg putting the
+  microphone back — the thing the app exists to do, so it alone takes the accent colour. The
+  person badge is the user, in this app or in System Settings. Devices coming and going and the
+  daemon starting are secondary. Problems are orange; red stays reserved, per the table below.
+- **A device is its transport's symbol and its name**: `headphones` for Bluetooth, `laptopcomputer`
+  for built-in, `iphone` for Continuity, `mic.fill` otherwise.
+- Rows where no device moved carry a two- or three-word label: Paused, Started, Couldn't switch
+  back.
+- Adjacent identical rows collapse into one with `×N` rather than disappearing.
+- The sentence the first version printed is still there, as the row's accessibility label.
+  VoiceOver reads the words; everyone else reads the picture. Combine the row's children and it
+  reads every symbol's own name too — "Right arrow" — so the row ignores them instead.
+
+### Time
+
+To the minute, never the second: **Just now** under a minute, **12 min ago** under an hour, then
+the clock time, under a day header — Today, Yesterday, then the date. One `TimelineView` drives
+the window, anchored on the newest entry so that row leaves "Just now" at exactly sixty seconds.
+
+### Who acted is read from the trigger, not guessed
+
+Every REVERT line in the log names its trigger, and `SIGHUP` — the config being reloaded — is the
+user picking something in this app. The first version showed those as "Moved your microphone
+back", crediting Micpeg with the user's own choice: in the screenshot that prompted this
+section, all ten rows were the user or a daemon restart. `ActivityLog.swift` has the whole
+classification and the three facts about the log it rests on.
+
 ## Container mapping
 
 Use the standard component in every case. This table is a starting point — confirm current
@@ -220,14 +270,15 @@ availability against Apple's documentation.
 | Label/value row | `LabeledContent` |
 | Caption below a group | the section's footer |
 | Device list (sheet) | `List` + an inset list style |
-| Window sizing | `.scrollDisabled(true)` on the `Form` — it is a scroll view, and without this the window takes a default height instead of its content's |
+| Window sizing | `.frame(width:)` + `.fixedSize(horizontal: false, vertical: true)` on the `Form` — **not** `.scrollDisabled(true)`, which was specified here and, measured, leaves the window at a default height with the content clipped ([`verification.md`](verification.md) §22) |
+| Activity | its own `Window` scene with `.contentMinSize`; a `Form` with one `Section` per day, inside one `TimelineView` |
 | Primary action | `.buttonStyle(.borderedProminent)`, large control size |
 | Secondary action | `.buttonStyle(.bordered)` |
 | Icon-only action | `.buttonStyle(.borderless)` + `.help()` + an accessibility label |
 | Banner | a labeled row with an SF Symbol, styled by severity |
 | Device picker | `.sheet` |
 | Level meter | `Canvas` |
-| Icons | SF Symbols only — `mic`, `speaker.wave.2`, `checkmark.circle.fill`, `info.circle`, `exclamationmark.triangle`, `pause.circle` |
+| Icons | SF Symbols only — `mic`, `speaker.wave.2`, `checkmark.circle.fill`, `info.circle`, `exclamationmark.triangle`, `pause.circle`; in Activity, `arrow.uturn.backward.circle.fill`, `person.crop.circle.fill`, `play.circle.fill`, `power.circle.fill`, `mic.circle.fill`, `mic.slash.circle.fill`, `headphones`, `laptopcomputer`, `iphone`, `mic.fill`, `arrow.right` |
 | Colors | semantic only — `.primary`, `.secondary`, `.tint`. Red exclusively for `BACKOFF` and approval failure |
 
 **The device list is not "every device with an input scope".** Aggregate-transport devices are
