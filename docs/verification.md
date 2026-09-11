@@ -161,6 +161,48 @@ that is not the target — and `micpeg on` fixes it immediately.
 The soak script now fails on exactly that mismatch. A once-daily sample is a weak net for a
 1.5-hour event, but it costs nothing.
 
+### Second occurrence, 2026-09-11
+
+Same shape, 42 minutes. A daemon restart's startup pin reverted AirPods to the USB mic at
+11:21:50.879; the post-revert re-judgement at 11:21:56.408 read the USB mic and wrote
+`state.json`; in the next ~12 s the user selected AirPods by hand; and the daemon wrote nothing
+until 12:04:32, when it yielded to them as a "settled Bluetooth device". A separate process,
+`micpeg status`, read AirPods throughout. Both occurrences follow one of the daemon's own writes
+away from AirPods.
+
+**"No log line" does not mean "no notification".** `evaluate()` has two exits that leave no
+trace: the self-write swallow (main.swift:547-556), and a judgement that reads the target while
+the reason is unchanged — `transition(.pinned, …)` with the same state and reason writes nothing
+(main.swift:715-731). A notification that arrived and was judged against a stale value is
+therefore indistinguishable in the log from one that never arrived, and the dropped notification
+recorded above is one of two explanations rather than an established one. AudioHardware.h says a
+set is asynchronous (:33, :302) and that the HAL caches the default devices (:541-546), so a
+process reading back a device it has just written is plausible. Nothing here confirms it.
+
+**Five reproduction attempts, none reproduced.** A passive observer ran beside the daemon: a
+separate process listening to `dIn `, `dev#` and `srst`, reading the default input 0, 300, 1,000
+and 5,000 ms after each notification.
+
+| The daemon's write | Then AirPods selected | The daemon |
+|---|---|---|
+| SIGHUP, three times | after 14.7, 15.5 and 17.5 s | yielded 0.40 s after each |
+| restart, nothing to revert | after 49 s | yielded 0.40 s after |
+| restart, startup revert 13 ms after the listeners registered | after 19.6 s | yielded 0.40 s after |
+
+Every change arrived as exactly one notification, with the new value readable at 0 ms. Two
+conditions of 11:21 were not reproduced: the switch landing inside the 15 s churn window, where a
+working daemon reverts; and the Micpeg app launching in the same seconds — it was being relaunched
+then, and it enumerates every device as it starts. Neither applies to 2026-09-10, which followed
+a `dev#` revert with no app running, so the two occurrences may not share a cause. The system log
+cannot place the switch: `bluetoothd`, `coreaudiod` and the app's launch left nothing at the
+default level, as trap 3 in design.md already found.
+
+**Why it matters beyond the gap.** A judgement that finally runs long after the change finds no
+arrival evidence left, so it classifies the old change as settled. An automatic switch missed this
+way ends as a yield, and protection stays off until the device leaves. The 5-second re-judgement
+added after the first occurrence did run at 11:21:56, and read the target: the switch came after
+it.
+
 ---
 
 ## Reproducing these checks
