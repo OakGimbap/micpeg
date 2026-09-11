@@ -34,10 +34,13 @@
 //
 //   - A REVERT's reason names its trigger. `SIGHUP` is the user acting through this app; every
 //     other trigger is Micpeg acting (the other callers of `applyPin(reason:)` in main.swift).
-//   - The SIGHUP handler resets YIELDED, PAUSED and BACKOFF to ABSENT *without logging it*
-//     (`cmdDaemon()` in main.swift), so a Resume reads `ABSENT -> PINNED: SIGHUP`, the same line
-//     as a pick. Telling them apart needs the previous transition, which is why the pass below
-//     runs oldest first instead of newest first and stopping early.
+//   - A Resume and a pick both reach the daemon as a SIGHUP, and both come out as
+//     `… -> PINNED: SIGHUP` or as a REVERT with that trigger. Telling them apart needs the
+//     previous transition, which is why the pass below runs oldest first instead of newest first
+//     and stopping early. The SIGHUP handler resets YIELDED and BACKOFF to ABSENT *without
+//     logging it* (`cmdDaemon()` in main.swift), and it used to reset PAUSED the same way — so
+//     in an older log a Resume reads `ABSENT -> PINNED: SIGHUP`, and the previous transition is
+//     the only witness that Micpeg had been paused.
 //   - A successful revert logs `REVERT -> T (reason)` and then a transition carrying the same
 //     reason text (`revert(to:reason:)`). They are one event, merged on that text. The first
 //     version merged on a two-second window, which is a guess about timing standing in for a
@@ -184,11 +187,24 @@ public enum ActivityLog {
     /// the state the next line's FROM claims — and the reason of a REVERT whose transition line
     /// may be next.
     static func activities(in text: String) -> [Activity] {
-        let lines = text.split(separator: "\n").compactMap(Line.init)
+        // Each event, and whether the line straight before it — any line, not only an event — is
+        // the one that ends a daemon's start. See `isStartPin`.
+        var lines: [(line: Line, atStart: Bool)] = []
+        var afterStartPin = false
+        for raw in text.split(separator: "\n") {
+            if let line = Line(raw) { lines.append((line, afterStartPin)) }
+            afterStartPin = isStartPin(raw)
+        }
         var out: [Activity] = []
         var lastState: DaemonState.Kind?
         var openRevert: Substring?
-        for (index, line) in lines.enumerated() {
+        for (index, entry) in lines.enumerated() {
+            let line = entry.line
+            // A daemon starts in ABSENT (`Daemon.state` in main.swift), whatever the log last said.
+            if line.message.hasPrefix(startMarker) {
+                lastState = .absent
+                continue
+            }
             let revertReason = openRevert
             openRevert = nil
             let kind: Activity.Kind?
@@ -202,8 +218,10 @@ public enum ActivityLog {
                 kind = revert.kind(after: lastState)
             } else if let transition = Transition(line.message) {
                 let isRevertEcho = revertReason.map { transition.reason == $0 } ?? false
-                let next = index + 1 < lines.count ? lines[index + 1] : nil
-                kind = isRevertEcho ? nil : transition.kind(after: lastState, line: line, next: next)
+                let next = index + 1 < lines.count ? lines[index + 1].line : nil
+                kind = isRevertEcho ? nil : transition.kind(after: lastState,
+                                                            starting: entry.atStart,
+                                                            line: line, next: next)
                 lastState = transition.to
             } else {
                 kind = nil
@@ -255,13 +273,29 @@ public enum ActivityLog {
             message = parts[2]
         }
 
-        var date: Date? { DaemonState.date(fromStamp: stamp) }
+        var date: Date? { DaemonState.stamp.date(from: stamp) }
+    }
+
+    /// The first line a daemon writes as it starts (`run()` in main.swift). Not a row of its
+    /// own — a start that lands on the kept microphone has one already — but it resets the state
+    /// every later line is read against: a daemon starts in ABSENT.
+    private static let startMarker = "micpeg starting"
+
+    /// The last line of a daemon's start: its churn window, armed "(daemon start)" just before
+    /// the startup pin (`run()` in main.swift), whose line comes straight after. A start while
+    /// paused writes `ABSENT -> PAUSED` there, which read as the user pausing again — two
+    /// restarts were "You paused Micpeg. 2 times." and no "Started" row. Only the line straight
+    /// after, because a start with the kept microphone unplugged writes no transition at all:
+    /// marked until the next transition instead, the user's own pause hours later was a start.
+    private static func isStartPin(_ raw: Substring) -> Bool {
+        raw.hasSuffix(" (daemon start)") && raw.contains("system churn window armed")
     }
 
     /// Cheap and deliberately loose: it only has to keep the ~90% of lines that are diagnostics
     /// out of the pass. What survives is classified properly below.
     private static func isEvent(_ message: Substring) -> Bool {
-        if message.hasPrefix("RE") || message.hasPrefix("FATAL:") || message.hasPrefix("WARNING:") {
+        if message.hasPrefix("RE") || message.hasPrefix("FATAL:") || message.hasPrefix("WARNING:")
+            || message.hasPrefix(startMarker) {
             return true
         }
         guard let space = message.firstIndex(of: " ") else { return false }
@@ -292,7 +326,7 @@ public enum ActivityLog {
     /// saying where the microphone had gone.
     private struct Revert {
         static let triggers = ["SIGHUP", "startup", "dev#", "srst recovery", "input-scope retry",
-                               "backoff expired"]
+                               "backoff expired", "revert retry", "unreadable default"]
         static let judgements = ["auto-switch", "flip-back", "system churn"]
 
         let target: Activity.Device
@@ -362,7 +396,8 @@ public enum ActivityLog {
                 .trimmingCharacters(in: .whitespaces)
         }
 
-        func kind(after lastState: DaemonState.Kind?, line: Line, next: Line?) -> Activity.Kind? {
+        func kind(after lastState: DaemonState.Kind?, starting: Bool, line: Line,
+                  next: Line?) -> Activity.Kind? {
             switch to {
             case .yielded:
                 return ActivityLog.chosenDevice(in: reason).map { .switchedAway(to: $0) }
@@ -397,7 +432,13 @@ public enum ActivityLog {
                     return nil
                 }
             case .absent:  return .disconnected
-            case .paused:  return .paused
+            case .paused:
+                // A start while paused is a start: the daemon comes up in ABSENT and says
+                // `ABSENT -> PAUSED` at once. And nothing is paused twice — PAUSED after a log
+                // that already said PAUSED is the SIGHUP handler's silent reset, in a log written
+                // before the daemon stopped doing that to PAUSED (`cmdDaemon()` in main.swift).
+                if starting { return .started }
+                return lastState == .paused ? nil : .paused
             case .backoff: return .backedOff
             // A state this app does not know cannot be phrased for the user, and guessing which
             // familiar one it resembles is the mistake `DaemonState.Kind.unknown` exists to stop.

@@ -14,11 +14,17 @@
 //     that are staying legacy, not a migration API. It has also been reported returning
 //     .notFound for installed, running services since macOS 14.5
 //     (developer.apple.com/forums/thread/750685, no Apple reply). It is called and recorded
-//     as evidence. The legacy install is *detected* by the plist being on disk.
+//     as evidence. The legacy install is *detected* by the plist being on disk, or by a job
+//     under the label that ServiceManagement did not submit.
 //
 //   - `launchctl print`'s output format is not a contract. Correctness here rests on the
-//     exit status (is there a job under this label at all) and on `pid = N`; everything else
-//     parsed out of it is reported to the user as text and never decides anything.
+//     exit status (is there a job under this label at all), on `pid = N`, and on one field in
+//     one direction: `managed_by = com.apple.xpc.ServiceManagement` is what lets the app take a
+//     job for a registration rather than the command-line install. Without it a job is read as
+//     hand-written; if a new format dropped the field, the cost would be a legacy banner that
+//     does not go away and a bootout the re-registration after it undoes — where deciding by
+//     the executable's path lost a registration outright (verification.md §26). Everything
+//     else parsed out of it is reported to the user as text and never decides anything.
 
 import Darwin
 import Foundation
@@ -68,6 +74,11 @@ struct JobState {
 
     static let none = JobState(present: false, pid: nil, runningExecutable: nil,
                                managedBy: nil, lastExitCode: nil)
+
+    /// launchd says ServiceManagement submitted this job: the app's registration, from some
+    /// copy. The one field parsed out of `launchctl print` that decides anything — the header
+    /// says why, and in which direction.
+    var isServiceManagement: Bool { managedBy == "com.apple.xpc.ServiceManagement" }
 }
 
 struct InstallSurvey {
@@ -96,41 +107,87 @@ struct InstallSurvey {
     /// for why the app has to remember this itself.
     let registeredFrom: RegistrationRecord.Value?
 
+    /// Whether the copy the record names is gone — deleted, or in the Trash. Read when the
+    /// survey is taken, like everything else here. See `verdict`.
+    let recordedBundleGone: Bool
+    /// Whether the executable the running daemon came out of is gone in the same way.
+    let runningCopyGone: Bool
+
     /// True when there is a record and it names somewhere other than here.
     var hasMoved: Bool {
         guard let recorded = registeredFrom?.bundlePath else { return false }
         return URL(fileURLWithPath: recorded).standardizedFileURL != bundleURL.standardizedFileURL
     }
 
+    /// A job under the label that ServiceManagement did not submit: the command-line install's,
+    /// running or not, whether or not its plist is still on disk. Decided by `managed_by`, not by
+    /// where the executable lives. After `MicpegApp link`, ~/.local/bin/micpeg is a symlink into
+    /// the bundle, so a hand-written job runs the bundle's own binary, and a check on the path
+    /// took it for the app's registration: the teardown left it running, deleted its plist and
+    /// registered nothing, and nothing was left to start at the next login.
+    var legacyJob: Bool { job.present && !job.isServiceManagement }
+
+    /// The command-line install is here in some form: its plist, its job, or both. It was the
+    /// plist alone, so a daemon still running after the plist was deleted by hand — or after a
+    /// teardown whose bootout failed — read as nothing running at all, and the Reconnect offered
+    /// for that cannot move a label a hand-written job holds (verification.md §1).
+    var hasLegacyInstall: Bool { legacyPlistExists || legacyJob }
+
     // MARK: - Verdict
 
     enum Verdict {
         /// Registered here, and the daemon that is running came out of this bundle.
         case healthy
-        /// The hand-written LaunchAgent is still on disk. Nothing else matters until it is gone.
+        /// The command-line install is still here — its plist, its daemon, or both. Nothing
+        /// else matters until it is gone.
         case legacyPresent
-        /// The app has moved since it registered. Measured: a running daemon is no evidence
-        /// against this — a shell `mv` carries the inode, so the process reports the new path
-        /// while the registration may still be describing the old one.
+        /// The app has moved since it registered: the record names a bundle that is no longer
+        /// there. Measured: a running daemon is no evidence against this — a shell `mv` carries
+        /// the inode, so the process reports the new path while the registration may still be
+        /// describing the old one.
         case moved(from: String)
-        /// Something is enforcing the label from a different bundle.
+        /// Another copy of the app, still installed, is running the daemon.
         case foreignBundle(URL)
-        /// A job exists but nothing is running it, or the app is not registered while a job
-        /// is present — the shape a moved or deleted bundle leaves behind.
+        /// A job exists but nothing is running it, or the app is not registered while a job is
+        /// present — the shape a moved or deleted bundle leaves behind. Or a daemon is running
+        /// from here with no Background Task Management record behind it, which is the shape a
+        /// Finder move leaves (§2): running now, and nothing will start it again.
         case stale
         case requiresApproval
         case notRegistered
     }
 
     var verdict: Verdict {
-        if legacyPlistExists { return .legacyPresent }
+        if hasLegacyInstall { return .legacyPresent }
         if serviceStatus == .requiresApproval { return .requiresApproval }
-        if hasMoved, let from = registeredFrom?.bundlePath { return .moved(from: from) }
+        let movedFrom = recordedBundleGone ? registeredFrom?.bundlePath : nil
         if let running = job.runningExecutable {
-            return running == bundledDaemon.resolvingSymlinksInPath()
-                ? .healthy
-                : .foreignBundle(running)
+            if running == bundledDaemon.resolvingSymlinksInPath() {
+                // This bundle's daemon, which is not health on its own. A shell `mv` carries the
+                // inode, so the process reports the new path while launchd holds the old one
+                // (§11), and the record catches that. A Finder move purges the Background Task
+                // Management records while the process runs on (§2), and `.notFound` then means
+                // nothing will start it again. `.enabled` is no evidence of health — it answered
+                // for somebody else's agent (§1) — but anything else is evidence against it, and
+                // this said HEALTHY beside `SMAppService: notFound`.
+                if let from = movedFrom { return .moved(from: from) }
+                return serviceStatus == .enabled ? .healthy : .stale
+            }
+            // Another copy's daemon, and checked before the record. Every copy of the app shares
+            // the record — it is in the com.micpeg.app defaults domain — so a second copy, from an
+            // update's disk image or a download or the build directory, read a record naming the
+            // first as a move, and repaired the registration over to itself at launch, unasked.
+            // Unless that copy is gone, and its daemon is running on an inode nothing will start
+            // again.
+            guard runningCopyGone else { return .foreignBundle(running) }
+            if let from = movedFrom { return .moved(from: from) }
+            return .stale
         }
+        // Nothing running. A registration made from a bundle that is gone is a move to repair —
+        // when there is a registration left to repair. With no job at all it went with its
+        // bundle, and making a new one adds a login item, which is the user's decision to make in
+        // onboarding, not a thing to do at launch.
+        if let from = movedFrom, job.present { return .moved(from: from) }
         if job.present { return .stale }
         return serviceStatus == .enabled ? .stale : .notRegistered
     }
@@ -142,16 +199,17 @@ struct InstallSurvey {
         case .healthy:
             return "the agent is registered by this app and the daemon is running from this bundle"
         case .legacyPresent:
-            return "a hand-written LaunchAgent from the CLI install is still on disk; it holds the"
-                 + " same label, so registering on top of it changes nothing"
+            return "the command-line install is still here (its plist, its daemon, or both); it"
+                 + " holds the same label, so registering on top of it changes nothing"
         case .moved(let from):
-            return "this app registered from \(from) and is now at \(bundleURL.path);"
-                 + " re-register from here"
+            return "this app registered from \(from), which is gone, and is now at"
+                 + " \(bundleURL.path); re-register from here"
         case .foreignBundle(let running):
-            return "the daemon holding this label is running from \(running.path), not from this"
-                 + " bundle"
+            return "the daemon holding this label is running from \(running.path), another copy"
+                 + " that is still installed"
         case .stale:
-            return "a launchd job exists under this label but no daemon is running from it"
+            return "a launchd job exists under this label, and nothing registered will start its"
+                 + " daemon again: it is not running, or runs with no record behind it"
         case .requiresApproval:
             return "registered, but switched off in Login Items — only the user can undo that"
         case .notRegistered:
@@ -181,6 +239,9 @@ struct InstallSurvey {
         let updated = (try? fm.attributesOfItem(atPath: DaemonPaths.state.path)[.modificationDate])
             as? Date
 
+        let job = readJob()
+        let record = RegistrationRecord.read()
+
         return InstallSurvey(
             bundleURL: bundle,
             bundledDaemon: MicpegCLI.bundledExecutable,
@@ -188,12 +249,38 @@ struct InstallSurvey {
             legacyPlistExists: fm.fileExists(atPath: plist.path),
             legacyProgram: program,
             legacyAPIStatus: SMAppService.statusForLegacyPlist(at: plist),
-            job: readJob(),
+            job: job,
             serviceStatus: AgentController.service.status,
             cli: readCLI(at: cliPath),
             cliPath: cliPath,
             stateUpdated: updated,
-            registeredFrom: RegistrationRecord.read())
+            registeredFrom: record,
+            recordedBundleGone: record.map {
+                isGone(MicpegCLI.executable(inBundle: URL(fileURLWithPath: $0.bundlePath)))
+            } ?? false,
+            runningCopyGone: job.runningExecutable.map(isGone) ?? false)
+    }
+
+    /// An executable that is not there, or is in the Trash. Moving an app to the Trash is a
+    /// rename, and a running daemon's path follows a rename the way it follows a shell `mv`
+    /// (verification.md §3, §11) — so "is it on disk" alone would call a trashed copy installed.
+    private static func isGone(_ executable: URL) -> Bool {
+        !FileManager.default.isExecutableFile(atPath: executable.path)
+            || executable.pathComponents.contains { $0 == ".Trash" || $0 == ".Trashes" }
+    }
+
+    /// The `.app` enclosing an executable, if there is one. The daemon's own
+    /// `enclosingAppBundle(of:)` walks upward like this for the same reason; a fixed number of
+    /// `deletingLastPathComponent()` calls only works for one layout.
+    static func enclosingAppBundle(of executable: URL) -> URL? {
+        var directory = executable.deletingLastPathComponent()
+        while directory.path != "/" {
+            if directory.pathExtension == "app" { return directory }
+            let parent = directory.deletingLastPathComponent()
+            if parent.path == directory.path { break }
+            directory = parent
+        }
+        return nil
     }
 
     private static func readCLI(at path: URL) -> CLIState {
@@ -266,7 +353,8 @@ struct InstallSurvey {
         out.append("launchd job:       \(job.present ? "present" : "none") — \(Self.serviceTarget)")
         if job.present {
             out.append("  pid:             \(job.pid.map(String.init) ?? "none (nothing running)")")
-            out.append("  running from:    \(job.runningExecutable?.path ?? "unknown — no pid to ask")")
+            out.append("  running from:    \(job.runningExecutable?.path ?? "unknown — no pid to ask")"
+                       + (runningCopyGone ? "   (that copy is gone: deleted, or in the Trash)" : ""))
             out.append("  managed_by:      \(job.managedBy ?? "(absent — not an SMAppService job)")")
             out.append("  last exit code:  \(job.lastExitCode ?? "(none)")")
         }
@@ -274,8 +362,10 @@ struct InstallSurvey {
         out.append("CLI on PATH:       \(cli.description) — \(cliPath.path)")
         out.append("state.json:        \(stateUpdated.map { DaemonState.stamp.string(from: $0) } ?? "never written")")
         if let recorded = registeredFrom {
-            out.append("registered from:   \(recorded.bundlePath)"
-                       + (hasMoved ? "   — NOT where this app is now" : "")
+            let whereNow = !hasMoved ? ""
+                : recordedBundleGone ? "   — NOT where this app is now, and nothing is left there"
+                : "   — another copy, still installed there"
+            out.append("registered from:   \(recorded.bundlePath)" + whereNow
                        + (recorded.at.map { ", at \(DaemonState.stamp.string(from: $0))" } ?? ""))
         } else {
             out.append("registered from:   (no record — this app has not registered on this"

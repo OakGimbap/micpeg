@@ -77,8 +77,11 @@ public enum Copy {
     public static let pausedSummary =
         String(localized: "Micpeg is paused. Your microphone can change freely.")
     public static let unconfiguredSummary = String(localized: "No microphone is chosen yet.")
-    public static let settingsUnreadableSummary =
-        String(localized: "Micpeg is still using the settings it loaded last.")
+    /// Not "still using the settings it loaded last": that is true of a helper that loaded a good
+    /// file before this one broke, and false of one started since, which has none.
+    public static let settingsUnreadableSummary = String(localized: """
+        Until its settings file is fixed, Micpeg may not be keeping any microphone.
+        """)
 
     // MARK: Banners
 
@@ -99,6 +102,12 @@ public enum Copy {
         Your microphone isn't being kept. Reconnecting usually fixes it.
         """)
     public static let notRunningAction = String(localized: "Reconnect")
+
+    public static let orphanedTitle = String(localized: "The background helper won't start again")
+    public static let orphanedBody = String(localized: """
+        It's running now, but nothing will start it again once it stops. Reconnecting usually \
+        fixes it.
+        """)
 
     public static let legacyTitle = String(localized: "An older installation is still set up")
     public static let legacyBody = String(localized: """
@@ -128,6 +137,12 @@ public enum Copy {
             leave nothing to do.
             """)
     }
+    /// app-ui.md, Unconfigured: "warn and confirm, do not silently disable". Asked once, when a
+    /// device on a blocked transport is about to be kept.
+    public static func keepBlockedTitle(_ device: String) -> String {
+        String(localized: "Keep \(device)?")
+    }
+    public static let keepAnyway = String(localized: "Keep Anyway")
 
     public static let restoreFailedTitle =
         String(localized: "Your microphone couldn't be switched back")
@@ -139,9 +154,16 @@ public enum Copy {
     public static let configUnreadableTitle =
         String(localized: "Micpeg's settings file can't be read")
     public static let configUnreadableBody = String(localized: """
-        The background helper is still using the settings it loaded last. Fix or remove the \
-        file to change them.
+        The background helper keeps the settings it loaded last, and has none if it has \
+        restarted since. Fix or remove the file.
         """)
+
+    /// While the app registers or repairs the background helper — up to half a minute when it
+    /// has to wait out a spawn. Informational and without a button: the window used to show the
+    /// helper-isn't-running failure through all of it, and its Reconnect started a second
+    /// operation on top of the first.
+    public static let workingTitle = String(localized: "Setting up the background helper")
+    public static let workingBody = String(localized: "This can take a few seconds.")
 
     // MARK: Actions
 
@@ -279,9 +301,8 @@ public enum Copy {
 
     // MARK: Failures the window has to surface
 
-    /// These four are shown to the user, so they belong here rather than inline in the model
-    /// and the audio code — the point of this file is that a translation can start and finish
-    /// in it.
+    /// These are shown to the user, so they belong here rather than inline in the model and the
+    /// audio code — the point of this file is that a translation can start and finish in it.
     public static let microphonePermissionDenied = String(localized: """
         Micpeg needs permission to use the microphone. Allow it in System Settings > \
         Privacy & Security > Microphone.
@@ -293,6 +314,15 @@ public enum Copy {
     }
     public static let deviceHasNoIdentifier =
         String(localized: "That device has no identifier to pin.")
+    /// A change the CLI refused, in the window's own words. The CLI's output is written for a
+    /// terminal and carries paths and decoding dumps; `AppModel.mutate` says how the cause is
+    /// found instead.
+    public static func changeFailedDisconnected(_ device: String) -> String {
+        String(localized: "\(device) isn't connected any more.")
+    }
+    public static let changeFailedSettings =
+        String(localized: "Micpeg's settings file can't be read, so nothing was changed.")
+    public static let changeFailed = String(localized: "Micpeg couldn't make that change.")
 
     // MARK: Settings
 

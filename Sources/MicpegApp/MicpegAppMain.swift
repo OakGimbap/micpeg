@@ -100,11 +100,17 @@ struct MicpegSettingsApp: App {
         // synchronous ServiceManagement round trips to backgroundtaskmanagementd. On the main
         // thread that is the window's first frame blocked for as long as btmd takes.
         let survey = await Task.detached { InstallSurvey.take() }.value
+        // Nothing here overwrites `.working`: an operation the user started while the survey
+        // ran reports its own verdict when it ends (`run(_:)`).
+        guard model.agent != .working else { return }
         if case .moved(let from) = survey.verdict {
+            // Through the same state `run(_:)` sets, so the window says what is happening for
+            // the half-minute this can take, and a Reconnect pressed meanwhile does nothing.
+            model.setAgent(.working)
             let outcome = await Task.detached { Migration.repair() }.value
             AgentController.report(outcome, label: "auto-repair after a move")
             model.setAgent(outcome.ok ? .repairedAfterMove(from: from)
-                                      : condition(for: outcome.survey))
+                                      : condition(after: outcome))
         } else {
             model.setAgent(condition(for: survey))
         }
@@ -123,37 +129,26 @@ struct MicpegSettingsApp: App {
         //
         // Only when the running executable really is inside an `.app`. The first version
         // stripped three path components unconditionally, which is right for
-        // `<App>.app/Contents/MacOS/micpeg` and wrong for everything else — and one of the
-        // "everything else" cases is reachable: delete the legacy plist by hand without
-        // `launchctl bootout` and a daemon keeps running from `~/.local/bin/micpeg`, which
-        // stripped down to the user's home directory. The banner would then have told them to
-        // delete it.
+        // `<App>.app/Contents/MacOS/micpeg` and wrong for everything else — deleting the legacy
+        // plist without `launchctl bootout` left a daemon running from `~/.local/bin/micpeg`,
+        // which stripped down to the user's home directory, and the banner told them to delete
+        // it. That daemon is `.legacyPresent` now, so an app should always be found here; the
+        // fallback stays so that no banner ever names a path that is not one.
         case .foreignBundle(let running):
-            if let app = Self.enclosingAppBundle(of: running) {
+            if let app = InstallSurvey.enclosingAppBundle(of: running) {
                 return .otherCopyRunning(at: app.path)
             }
-            // Not an app: a daemon left over from the command-line install. Nothing of this
-            // bundle's is keeping the microphone, which is the other sentence exactly.
             return .notKeeping
+        // A daemon is running and nothing will start it again: the orphan a Finder move leaves,
+        // or one whose copy of the app is gone. "The background helper isn't running" would be
+        // false today; the repair is the same.
+        case .stale where survey.job.pid != nil:
+            return .orphaned
         // These three mean nothing is keeping the microphone: one sentence, one repair.
         // `.moved` reaches here only if the automatic repair above failed.
         case .notRegistered, .stale, .moved:
             return .notKeeping
         }
-    }
-
-    /// The `.app` enclosing an executable, if there is one. The daemon's own
-    /// `enclosingAppBundle()` walks upward like this for the same reason; a fixed number of
-    /// `deletingLastPathComponent()` calls only works for one layout.
-    private static func enclosingAppBundle(of executable: URL) -> URL? {
-        var directory = executable.deletingLastPathComponent()
-        while directory.path != "/" {
-            if directory.pathExtension == "app" { return directory }
-            let parent = directory.deletingLastPathComponent()
-            if parent.path == directory.path { break }
-            directory = parent
-        }
-        return nil
     }
 
     @MainActor
@@ -175,19 +170,41 @@ struct MicpegSettingsApp: App {
     /// The first "Keep <device>" writes the config through the CLI. That alone leaves a
     /// configured machine with no daemon, so this is where the login item is actually created —
     /// after the user has made a deliberate choice, never at launch.
+    ///
+    /// Not when the agent already runs from here: the CLI's SIGHUP has told it about the choice,
+    /// and a register() over a healthy registration starts no new daemon for the confirmation to
+    /// see, so it would wait out its whole timeout and report a failure.
     @MainActor
     private func enableAfterFirstChoice() {
+        guard model.agent != .healthy else { return }
         run { Migration.migrate() }
     }
 
+    /// One registration operation at a time. `.working` is set before the operation starts and
+    /// replaced by its verdict, so a second press — Reconnect during the launch repair, a
+    /// double-click on Replace It — finds it and does nothing. There was no guard: the second
+    /// unregister killed the daemon the first operation was waiting for.
     @MainActor
     private func run(_ body: @escaping @Sendable () -> Migration.Outcome) {
+        guard model.agent != .working else { return }
+        model.setAgent(.working)
         Task {
             let outcome = await Task.detached(priority: .userInitiated) { body() }.value
             AgentController.report(outcome, label: "window action")
-            model.setAgent(condition(for: outcome.survey))
+            model.setAgent(condition(after: outcome))
             model.reloadAll()
         }
+    }
+
+    /// What the window says after an operation: the survey's verdict — except that an operation
+    /// that did not confirm a new daemon is never shown as healthy. The survey can read HEALTHY
+    /// off the old process, still running on the inode a move carried, beside a record the
+    /// operation has just rewritten and a registration `.enabled` again, while the next spawn
+    /// fails. `Outcome.ok` says so, and this used to drop it.
+    @MainActor
+    private func condition(after outcome: Migration.Outcome) -> AppModel.AgentCondition {
+        let condition = condition(for: outcome.survey)
+        return !outcome.ok && condition == .healthy ? .notKeeping : condition
     }
 
     // MARK: - Language

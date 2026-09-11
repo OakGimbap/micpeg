@@ -101,29 +101,57 @@ public final class DeviceWatch {
     private var installed: [(AudioObjectPropertyAddress, AudioObjectPropertyListenerBlock)] = []
     private let coalescer: Coalescer
 
+    /// Called on the main actor, like everything below that touches `installed`: `AppModel`
+    /// creates and releases this there, and a coreaudiod restart hops there to reinstall.
     public init(onChange: @escaping @MainActor () -> Void) {
         self.coalescer = Coalescer(delay: DaemonTiming.coalesce, onFire: onChange)
-        // dev# — devices appearing and disappearing.
-        // dIn  — the default input moving, which is the event the whole program exists for.
-        // dOut — the default output moving, which the window displays.
-        for selector in [kAudioHardwarePropertyDevices,
-                         kAudioHardwarePropertyDefaultInputDevice,
-                         kAudioHardwarePropertyDefaultOutputDevice] {
-            install(addr(selector))
-        }
+        installAll()
     }
 
     deinit {
         coalescer.cancel()
+        removeAll()
+    }
+
+    // dev# — devices appearing and disappearing.
+    // dIn  — the default input moving, which is the event the whole program exists for.
+    // dOut — the default output moving, which the window displays.
+    // srst — coreaudiod restarting. AudioHardware.h: a client must re-establish its "added
+    //        listeners" afterwards (design.md, trap 2), and the daemon does; the window did not,
+    //        so a restart while it was open could leave it drawing what it last read.
+    private func installAll() {
+        for selector in [kAudioHardwarePropertyDevices,
+                         kAudioHardwarePropertyDefaultInputDevice,
+                         kAudioHardwarePropertyDefaultOutputDevice] {
+            install(addr(selector)) { [weak self] in self?.coalescer.schedule() }
+        }
+        install(addr(kAudioHardwarePropertyServiceRestarted)) { [weak self] in
+            // Off this queue before touching the listeners: this block is one of the deliveries
+            // on it, and the daemon keeps teardown off its delivery queue for the same reason
+            // (`Daemon.work`).
+            DispatchQueue.main.async { self?.reinstall() }
+        }
+    }
+
+    private func reinstall() {
+        removeAll()
+        installAll()
+        // Everything is read again. Whatever changed while the listeners were dead said nothing.
+        // Scheduled from `queue`, the one queue `coalescer` is driven from.
+        queue.async { [weak self] in self?.coalescer.schedule() }
+    }
+
+    private func removeAll() {
         for (address, block) in installed {
             var a = address
             AudioObjectRemovePropertyListenerBlock(systemObject, &a, queue, block)
         }
+        installed.removeAll()
     }
 
-    private func install(_ address: AudioObjectPropertyAddress) {
+    private func install(_ address: AudioObjectPropertyAddress, _ handler: @escaping () -> Void) {
         var a = address
-        let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in self?.coalescer.schedule() }
+        let block: AudioObjectPropertyListenerBlock = { _, _ in handler() }
         let status = AudioObjectAddPropertyListenerBlock(systemObject, &a, queue, block)
         // A listener that failed to install is the exact shape of this project's favourite
         // silent failure: the window would simply stop updating, with nothing to read.

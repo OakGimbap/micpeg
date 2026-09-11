@@ -71,43 +71,26 @@ public struct DaemonState: Equatable, Sendable {
     /// goes into the log, so the two can be lined up by eye. `ActivityLog` parses log stamps
     /// with it, and the survey prints its times with it for the same reason.
     ///
-    /// `en_US_POSIX` because a fixed format string without it is interpreted in the user's
-    /// locale. **The daemon's own formatter (`main.swift`, `stampFormatter`) does not set a
-    /// locale**, so on a system configured for a non-Gregorian calendar the two would disagree
-    /// and every activity line would silently vanish. Fixing that is a daemon change and the
-    /// daemon is finished; recorded here rather than done.
+    /// `en_US_POSIX` on both sides: the daemon's `stampFormatter` sets it too. It did not, and
+    /// this file used to parse with the current locale as a fallback on the theory that a
+    /// non-Gregorian year would fail here and be rescued there. Measured, it never failed:
+    /// this parser read the Buddhist 2569, the Japanese 0008 and even Arabic-Indic digits as
+    /// Gregorian years, so the fallback never ran and every row was misdated. The fix was the
+    /// daemon's one line, and the fallback went with it.
     public static let stamp: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS"
         f.locale = Locale(identifier: "en_US_POSIX")
         return f
     }()
-
-    /// The same format read in whatever locale and calendar the daemon is writing in.
-    private static let stampInCurrentLocale: DateFormatter = {
-        let f = DateFormatter()
-        f.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS"
-        return f
-    }()
-
-    /// Parse a stamp the daemon wrote.
-    ///
-    /// POSIX first, then the current locale. The fallback exists because the daemon's
-    /// formatter sets no locale, so on a Mac whose region selects a non-Gregorian calendar it
-    /// writes a Japanese or Buddhist year — and a POSIX-only parser would reject every line,
-    /// emptying "Recent activity" with nothing to show why. The one-line fix belongs in the
-    /// daemon; the daemon is finished, so the app absorbs it instead.
-    static func date(fromStamp text: String) -> Date? {
-        stamp.date(from: text) ?? stampInCurrentLocale.date(from: text)
-    }
 }
 
 // MARK: - config.json
 
 /// Only the fields the window is allowed to care about. The tuning constants —
 /// `debounceMs`, `arrivalWindowSeconds`, `reverifyDelaySeconds`, `postWriteGraceSeconds` —
-/// are deliberately not decoded: app-ui.md forbids showing them, and a field that is not read
-/// cannot accidentally end up on screen.
+/// are decoded only to be checked the way the daemon checks them, and are never stored:
+/// app-ui.md forbids showing them, and a value that is not kept cannot end up on screen.
 public struct PinnedConfig: Equatable, Sendable {
     public struct Target: Equatable, Sendable {
         public var uid: String?
@@ -129,6 +112,15 @@ public struct PinnedConfig: Equatable, Sendable {
         self.blockedTransportCodes = Set(blockedTransports.compactMap(transportCode(_:)))
     }
 
+    /// The daemon's default (`Config.fallback` in main.swift), for a file that names none and
+    /// for no file at all. The window marks devices ⚠ from this, and it used to fall back to an
+    /// empty list: on a fresh install with AirPods connected — the moment macOS has just moved
+    /// the input to them — onboarding offered them selected and unmarked, and one click pinned
+    /// the device the product exists to undo.
+    public static let defaultBlockedTransports = ["bluetooth", "bluetoothle"]
+    public static let defaultBlockedTransportCodes =
+        Set(defaultBlockedTransports.compactMap(transportCode(_:)))
+
     /// True when there is nothing for the daemon to enforce. This is app-ui.md's
     /// "unconfigured" state, and it is a different thing from "the pinned device is unplugged".
     public var isUnconfigured: Bool { priority.isEmpty }
@@ -140,21 +132,48 @@ public struct PinnedConfig: Equatable, Sendable {
         return first.name ?? first.uid
     }
 
+    /// The daemon's rule, not a looser one (`Config.init(from:)` in main.swift): a key that is
+    /// absent takes the default, and a key that is present must decode as the daemon's type.
+    /// Every field here used to be optional and the tuning keys were not looked at, so files the
+    /// daemon rejects read as fine — `null` passed as absent, `"debounceMs": 250.5` was never
+    /// read — and the window showed its settings while the daemon ran with none. The tuning
+    /// values are decoded to be checked and then dropped: app-ui.md keeps them off the screen,
+    /// and a value that is never stored cannot end up there.
     private struct Wire: Decodable {
         struct Input: Decodable { var priority: [Ref] }
         struct Ref: Decodable { var uid: String?; var name: String? }
-        var enabled: Bool?
-        var input: Input?
-        var blockTransports: [String]?
+        var enabled: Bool
+        var priority: [Ref]
+        var blockTransports: [String]
+
+        private enum Key: String, CodingKey {
+            case enabled, input, blockTransports
+            case arrivalWindowSeconds, debounceMs, reverifyDelaySeconds, postWriteGraceSeconds
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: Key.self)
+            func present<T: Decodable>(_ type: T.Type, _ key: Key) throws -> T? {
+                c.contains(key) ? try c.decode(type, forKey: key) : nil
+            }
+            enabled = try present(Bool.self, .enabled) ?? true
+            priority = try present(Input.self, .input)?.priority ?? []
+            blockTransports = try present([String].self, .blockTransports)
+                ?? PinnedConfig.defaultBlockedTransports
+            _ = try present(Double.self, .arrivalWindowSeconds)
+            _ = try present(Int.self, .debounceMs)
+            _ = try present(Double.self, .reverifyDelaySeconds)
+            _ = try present(Double.self, .postWriteGraceSeconds)
+        }
     }
 
     public enum ReadResult: Equatable, Sendable {
         case ok(PinnedConfig)
         /// No file. A fresh install, and the app's cue to show onboarding.
         case missing
-        /// There is a file and it does not parse. Not the same as `missing`: the daemon keeps
-        /// running on its last good settings, so the window must not offer to set things up
-        /// as if nothing were there.
+        /// There is a file and it does not parse. Not the same as `missing`: someone chose a
+        /// microphone once, and the daemon keeps whatever it last loaded — none, if it has
+        /// restarted since — so the window must not offer to set things up from nothing.
         case unreadable(String)
     }
 
@@ -166,9 +185,9 @@ public struct PinnedConfig: Equatable, Sendable {
         do {
             let wire = try JSONDecoder().decode(Wire.self, from: data)
             return .ok(PinnedConfig(
-                enabled: wire.enabled ?? true,
-                priority: (wire.input?.priority ?? []).map { Target(uid: $0.uid, name: $0.name) },
-                blockedTransports: wire.blockTransports ?? []))
+                enabled: wire.enabled,
+                priority: wire.priority.map { Target(uid: $0.uid, name: $0.name) },
+                blockedTransports: wire.blockTransports))
         } catch {
             return .unreadable("\(error)")
         }
