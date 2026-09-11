@@ -447,6 +447,10 @@ final class Daemon {
     }
 
     func onDefaultInput() {
+        // Diagnostic, 2026-09-11. Twice the default input sat on AirPods for over half an hour
+        // with no line at all, and nothing could say whether this handler had even run. It says
+        // so now, once per notification; the JUDGED lines in evaluate() say what was read.
+        log("EVENT dIn  — default input changed")
         let now = Date()
         // Every notification used to reset the timer with no ceiling, so a burst
         // arriving faster than debounceMs could starve evaluate() indefinitely.
@@ -477,7 +481,7 @@ final class Daemon {
         work.asyncAfter(deadline: .now() + after) { [weak self] in
             guard let self else { return }
             self.reconcileArmed = false
-            self.evaluate()
+            self.evaluate(trigger: why)
         }
     }
 
@@ -533,8 +537,9 @@ final class Daemon {
         transition(.absent, reason)
     }
 
-    /// Full judgment, including the yield decision. Only the 'dIn ' listener calls this.
-    func evaluate() {
+    /// Full judgment, including the yield decision. The 'dIn ' listener calls this, and so do
+    /// the one-shot re-judgements; `trigger` names which, for the log and for nothing else.
+    func evaluate(trigger: String = "dIn") {
         reloadConfigIfNeeded()
         guard config.enabled else { transition(.paused, "disabled in config"); return }
         guard let current = defaultInputDevice() else {
@@ -552,6 +557,11 @@ final class Daemon {
                 expectedSelfWrite = nil
             } else if current == e.device {
                 expectedSelfWrite = nil
+                // One of the two exits that used to leave no line. With both silent, a
+                // notification judged against a stale value looked exactly like one that never
+                // arrived (docs/verification.md, Open issue); these lines tell the two apart.
+                log("JUDGED (\(trigger)) \(deviceName(current)) — our own write "
+                  + "\(String(format: "%.1f", Date().timeIntervalSince(e.at)))s ago; swallowed")
                 return
             }
         }
@@ -562,6 +572,11 @@ final class Daemon {
         }
         inputScopeRetries = 0
         if current == target {
+            // The other exit that used to be silent: with the state already PINNED the
+            // transition below writes no line, so a stale read of the target left no trace.
+            if state == .pinned {
+                log("JUDGED (\(trigger)) \(deviceName(current)) — already the target")
+            }
             transition(.pinned, "default input is the target")
             return
         }
@@ -694,6 +709,10 @@ final class Daemon {
         // likely explanation left is a lost notification. The cause was never pinned
         // down, so this is insurance, not a fix: one extra judgment while the evidence
         // is still inside the arrival window. Self-disarming, no steady-state cost.
+        //
+        // It happened again on 2026-09-11 for 42 minutes, and this look had run and read the
+        // target: the switch came after it. Nor is a lost notification the only explanation —
+        // the JUDGED lines in evaluate() exist to decide the next one.
         scheduleReconcile("post-revert settle", after: 5.0)
     }
 

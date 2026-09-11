@@ -203,6 +203,29 @@ way ends as a yield, and protection stays off until the device leaves. The 5-sec
 added after the first occurrence did run at 11:21:56, and read the target: the switch came after
 it.
 
+**Diagnostics, from 2026-09-11.** Both silent exits now write a line, and so does every `dIn `
+notification the daemon receives, so the next occurrence decides itself. Seen on the restart
+that deployed them:
+
+```
+13:56:02.107 REVERT -> <USB mic> (startup, displacing AirPods [blue])
+13:56:02.112 EVENT dIn  — default input changed
+13:56:02.513 JUDGED (dIn) <USB mic> — our own write 0.4s ago; swallowed
+13:56:07.657 JUDGED (post-revert settle) <USB mic> — already the target
+```
+
+Reading the next one against `micpeg status`, which is a fresh process and names the device
+actually in use:
+
+- no `EVENT dIn` when the input changed — the notification never reached the daemon;
+- `EVENT dIn` followed by a `JUDGED` naming the target, while status names another device — the
+  daemon judged a stale value;
+- `EVENT dIn` and nothing after it — lost between the debounce and the judgement.
+
+Each is one line per event and nothing at idle. `ActivityLog` does not read them as events (133
+rows parsed with them in the log, none of them a `JUDGED` or `EVENT`), and
+`scripts/leakcheck.sh` only counts log lines.
+
 ---
 
 ## Reproducing these checks
