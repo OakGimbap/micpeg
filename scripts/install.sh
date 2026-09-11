@@ -9,6 +9,17 @@
 set -e
 cd "$(dirname "$0")/.."
 
+# Micpeg.app registers the same label through ServiceManagement, and a hand-written agent under
+# it boots the app's one out (docs/verification.md §8). The micpeg built below refuses as well,
+# but only after the staging step has already replaced ~/.local/bin/micpeg — which, once the app
+# has linked it, is the app's CLI.
+if launchctl print "gui/$(id -u)/com.micpeg.agent" 2>/dev/null \
+     | grep -q 'managed_by = com.apple.xpc.ServiceManagement'; then
+  echo "error: Micpeg.app manages the background agent on this Mac. Update the app instead;" >&2
+  echo "       this script installs the standalone command-line version." >&2
+  exit 1
+fi
+
 ARGS=(-c release)
 [ -n "$MICPEG_UNIVERSAL" ] && ARGS+=(--arch arm64 --arch x86_64)
 

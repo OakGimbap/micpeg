@@ -25,8 +25,9 @@ Claude Code의 voice mode가 그렇습니다 — push-to-talk을 누르는 그 �
 CoreAudio의 기본 입력 속성을 감시하다가 macOS가 그것을 블루투스 장치로 넘기면 되돌리는
 약 4MB짜리 launchd 에이전트입니다.
 
-- **입력만 건드립니다.** 소스 어디에도 `DefaultOutputDevice` / `DefaultSystemOutputDevice`
-  문자열이 없습니다. 출력은 원래대로 AirPods가 가져갑니다.
+- **입력만 건드립니다.** 백그라운드 에이전트의 소스에는 `DefaultOutputDevice` /
+  `DefaultSystemOutputDevice` 문자열이 없고, CI가 이를 검사합니다. 설정 앱은 기본 출력을
+  표시하려고 읽기만 할 뿐 CoreAudio에 아무것도 쓰지 않습니다. 출력은 원래대로 AirPods가 가져갑니다.
 - **직접 고른 선택은 존중합니다.** 사용자가 다른 마이크를 고르면 물러납니다.
   시스템이 한 것으로 판단되는 전환만 되돌립니다.
 - **사실상 공짜입니다.** idle wakeup 0회, `phys_footprint` 약 4MB, 실사용 24시간 동안 CPU 0.59초.
@@ -91,7 +92,7 @@ git pull
 |---|---|
 | `micpeg status` | 현재 상태, 고정 대상, 실제 기본 입력, 데몬 생존 여부 |
 | `micpeg list` | 입력 장치 전체를 transport type·UID와 함께 나열 |
-| `micpeg pick` | 현재 기본 입력을 고정 대상으로 지정 |
+| `micpeg pick` | 현재 기본 입력을 고정 대상으로 지정 (이전 대상은 대체됨) |
 | `micpeg on` / `off` | 고정 재개 / 일시 중지 (yield도 함께 해제) |
 | `micpeg install` | 설정 + LaunchAgent 작성 후 에이전트 부트스트랩 |
 | `micpeg uninstall` | 에이전트 bootout + LaunchAgent 제거 |
@@ -108,7 +109,7 @@ git pull
 | 키 | 기본값 | 의미 |
 |---|---|---|
 | `enabled` | `true` | 마스터 스위치. `micpeg off`가 이 값을 씁니다. |
-| `input.priority` | *(설치 시 자동)* | `{uid, name}` 순서 목록. 연결돼 있는 첫 항목이 대상. UID를 우선 매칭하고 `name`은 폴백입니다. |
+| `input.priority` | *(설치 시 자동)* | `{uid, name}` 순서 목록. 연결돼 있는 첫 항목이 대상. UID를 우선 매칭하고 `name`은 폴백입니다. `micpeg pick`은 항목 하나로 덮어씁니다. 여러 항목은 직접 편집할 때만 생깁니다. |
 | `blockTransports` | `["bluetooth", "bluetoothle"]` | 되돌릴 transport. 나머지는 전부 의도적 선택으로 봅니다. |
 | `arrivalWindowSeconds` | `15` | 차단 대상 장치가 이 시간 내에 도착했다면 자동 전환이지 사용자 결정이 아닙니다. |
 | `debounceMs` | `300` | 알림 폭주를 합칩니다. |

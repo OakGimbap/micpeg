@@ -26,8 +26,10 @@ There is no first-party setting to turn this off. `com.apple.coreaudio` and
 A ~4 MB launchd agent that watches the CoreAudio default-input property and puts it back
 when macOS hands it to a Bluetooth device.
 
-- **Input only.** The strings `DefaultOutputDevice` and `DefaultSystemOutputDevice` do not
-  appear anywhere in the source. Your AirPods still take over audio output, as they should.
+- **Input only.** The background agent's source never contains `DefaultOutputDevice` or
+  `DefaultSystemOutputDevice`, and CI checks that. The settings app reads the default output
+  only to display it, and writes nothing to CoreAudio at all. Your AirPods still take over
+  audio output, as they should.
 - **Respects your choices.** Pick a different microphone yourself and micpeg yields. It only
   reverses transitions it can attribute to the system.
 - **Effectively free.** 0 idle wakeups, ~4 MB `phys_footprint`, 0.59 s of CPU across 24 hours
@@ -93,7 +95,7 @@ upgrade actually takes effect.
 |---|---|
 | `micpeg status` | Current state, pinned target, live default input, daemon liveness |
 | `micpeg list` | Every input device with its transport type and UID |
-| `micpeg pick` | Make the current default input the pinned target |
+| `micpeg pick` | Make the current default input the pinned target, replacing the previous one |
 | `micpeg on` / `off` | Resume / pause pinning (also clears a yield) |
 | `micpeg install` | Write config + LaunchAgent and bootstrap the agent |
 | `micpeg uninstall` | Bootout the agent and remove its LaunchAgent |
@@ -110,7 +112,7 @@ or just run `micpeg on`.
 | Key | Default | Meaning |
 |---|---|---|
 | `enabled` | `true` | Master switch. `micpeg off` sets this. |
-| `input.priority` | *(from install)* | Ordered list of `{uid, name}`. The first one present wins. UID is matched first; `name` is a fallback. |
+| `input.priority` | *(from install)* | Ordered list of `{uid, name}`. The first one present wins. UID is matched first; `name` is a fallback. `micpeg pick` writes a list of one; a longer list is for editing by hand. |
 | `blockTransports` | `["bluetooth", "bluetoothle"]` | Transports micpeg will reverse. Everything else is treated as a deliberate choice. |
 | `arrivalWindowSeconds` | `15` | A blocked device that appeared this recently is an automatic switch, not your decision. |
 | `debounceMs` | `300` | Coalesces notification bursts. |
