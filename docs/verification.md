@@ -1104,3 +1104,79 @@ locked (`CGSSessionScreenIsLocked = Yes`), and a locked session does not realise
 windows. Nothing was wrong with the code. The window's appearance has not been re-checked on
 screen since the cleanup for that reason; everything reachable without a window — the parser
 against the real log, `survey`, `meter`, the invariants, the daemon still pinning — has.
+
+#### 23. The activity list, measured and moved out
+
+Prompted by a screenshot of the expanded "Recent activity": ten rows timed to the second, each a
+two-line sentence, under an "Earlier" disclosure whose animation was long, stuttered, and grew
+the window.
+
+**Idle, the window burned a quarter of a core.** With the list expanded and nothing happening,
+`proc_pidinfo` read in 10 ms steps gave 1,253 ms of CPU in 5 s — 25.1% — and `ps -M` put all of
+it on the main thread (0.74 s of user time in 3 s; every other thread flat). It was continuous,
+not a once-a-second burst: every 100 ms bucket held 6–58 ms, with a slight rise on each whole
+second. Accessibility reads, which the main thread serves, took up to 161 ms. A main thread that
+busy between frames is what the disclosure's stutter looked like from outside.
+
+| | Before | After |
+|---|---|---|
+| Main window | 460×483 collapsed, 460×819 expanded | **460×346**, fixed |
+| Idle CPU, main window | **25.1%** | **1.11%** (10 s; four small buckets, the first seconds after launch) |
+| Idle CPU, main + Activity with 116 rows | — | **0.03%** (3 ms in 10 s) |
+| Main window when Activity opens | — | 460×346 → 460×346 |
+
+What that establishes, and what it does not. The cost lived in the activity section — ten
+`Text(date, style: .relative)` rows ticking inside a window sized to its content — because
+removing it is the only difference between 25% and 1%, and a grouped `Form` of 116 static rows
+in a window the user sizes costs nothing measurable. It does not separate the ticking text from
+the content-sized window, and **the per-frame window resize during the animation was not
+observed**: the disclosure publishes no AX action and its AXValue is not settable, so it could
+not be driven from outside, and a scratch SwiftUI reproduction in six variants never got a
+window to measure — SwiftUI opened none when launched from a background shell, bare or as a
+bundle under `open -g`. Once nothing in the main window can change its height neither question
+decides anything, so both are recorded as open rather than guessed.
+
+**The list was also wrong.** Of the ten rows in the screenshot, none was Micpeg defending the
+microphone: each "Moved your microphone back" was `REVERT … (SIGHUP, …)`, the config reloading
+because the user had just picked a microphone in this app, and each "Selected Elgato Wave:1." was
+the daemon starting. And the line that matters most — macOS switching to a headset and Micpeg
+switching back — is `REVERT -> T (auto-switch to X)`, with no "displacing", so the parser had
+been reporting it without saying where the microphone had gone.
+
+`MicpegApp activity` prints the Activity window's rows from the real log: **116 rows from 244 KB
+in 14.3 ms**. By kind: the user picking in the app 26, switching away in System Settings 28 and
+back 1, pausing 4 and resuming 3; Micpeg restoring 20; the kept microphone disconnecting 8 and
+reconnecting 7; the daemon starting 36 times, collapsed into 20 rows. This log holds no failure
+lines. A fixture holding what no session here produced — REVERT FAILED, RE-VERIFY FAILED,
+`FATAL:`, both `WARNING:`s, a loop guard, names with "(" and "[" in them, an unknown trigger, a
+state from a future daemon — gave 22 rows, each as intended: the unknown trigger as a restore
+that claims no origin, the unknown state dropped.
+
+**Three smaller things only measurement found.**
+
+- `.accessibilityElement(children: .ignore)` on a row inside a grouped `Form` is published as
+  **AXUnknown, and AXUnknown carries no AXValue**. The row's `.accessibilityValue(time)`
+  vanished, so VoiceOver would never have said when anything happened. With
+  `.accessibilityAddTraits(.isStaticText)` the row is AXStaticText with the label as its value,
+  and the time is part of the label.
+- **A rebuilt bundle's daemon is not byte-identical to the installed one** even when its source
+  is: `cmp` differed at byte 289,000 of 307,968, inside the signature, which carries its signing
+  time. The CDHash is what means "same code", and it matched. Replacing the app with `rsync
+  --checksum --exclude Contents/MacOS/micpeg` after comparing CDHashes left the running daemon
+  on its inode (116074616 before and after) and its pid, with `codesign --verify --strict
+  --deep` passing. That is the way to update the app without restarting the daemon — which
+  matters, see below.
+- Quitting with both windows open and relaunching restored **only the main window**.
+  `restorationBehavior`, which could force that and is macOS 15 only, is not needed.
+
+**One observation about the daemon, not acted on.** The first build was installed the stage 2
+way, `ditto` then `launchctl kickstart -k`. The restarted daemon's startup pin put the USB
+microphone back over AirPods the user had chosen half an hour earlier — `REVERT -> … (startup,
+displacing … [blue])` — because a yield does not survive a restart. By 11:22:10 the default
+input was AirPods again — the user had switched back by hand — yet `state.json` still read
+PINNED with the reason "default input is the target" from 11:21:56, and the daemon wrote nothing
+about the switch: its next line came at 12:04:32, a yield to AirPods, forty minutes later. The
+new summary said so in the meantime — "… is connected, but another microphone is in use." —
+where the old ✓ would have claimed the opposite. A judgement on `dIn` always writes a line, so
+for that switch it either never ran or read the device from before the switch. Which one is
+open.

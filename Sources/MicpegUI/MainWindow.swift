@@ -16,8 +16,12 @@
 //     banner    absent when healthy
 //     body      the device list when unconfigured, Output/Input rows when configured
 //     meter     level + test control
-//     activity  the most recent daemon actions
 //     actions   Change Microphone · Pause
+//
+// There is no activity list here any more. It was an "Earlier" disclosure, the only thing in
+// this window able to change its height, and this window is sized to its content — so opening
+// it resized the whole window. It is its own window now (ActivityWindow.swift), and the one
+// thing from it that has to interrupt, a restore that failed, is a banner.
 
 import CoreAudio
 import SwiftUI
@@ -31,8 +35,8 @@ public struct MainWindow: View {
     private let onFirstChoice: () -> Void
 
     @State private var showingPicker = false
-    @State private var showEarlier = false
     @State private var errorMessage: String?
+    @Environment(\.openWindow) private var openWindow
     @State private var test: InputTest
 
     public init(model: AppModel,
@@ -49,7 +53,7 @@ public struct MainWindow: View {
     public var body: some View {
         Form {
             if let banner = model.banner {
-                Section { BannerRow(banner: banner, act: onBannerAction) }
+                Section { BannerRow(banner: banner, act: handle) }
             }
             if let errorMessage {
                 // Not a Banner. Assembling one with an empty body and a no-op action, purely
@@ -94,6 +98,16 @@ public struct MainWindow: View {
             // Releases the directory descriptor, its dispatch source and three HAL listeners.
             // They used to stay installed for the life of the process.
             model.stopWatching()
+        }
+    }
+
+    /// `.showActivity` opens a window, which takes this view's environment; the rest are
+    /// registration work and belong to the app target.
+    private func handle(_ action: AppModel.Banner.Action) {
+        if action == .showActivity {
+            openWindow(id: ActivityWindow.sceneID)
+        } else {
+            onBannerAction(action)
         }
     }
 
@@ -152,9 +166,10 @@ public struct MainWindow: View {
             LabeledContent(Copy.inputLabel) {
                 HStack(spacing: 6) {
                     Text(model.currentInput?.name ?? Copy.noDevice)
-                    if model.daemon?.kind == .pinned, model.targetIsConnected, !model.isPaused {
+                    if model.daemon?.kind == .pinned, model.inputIsTarget, !model.isPaused {
                         // Color is never the only signal: the summary sentence below says the
-                        // same thing in words.
+                        // same thing in words. `inputIsTarget`, not the daemon's state alone: a
+                        // failed revert leaves that at PINNED with another device selected.
                         Image(systemName: "checkmark.circle.fill")
                             .foregroundStyle(.tint)
                             .accessibilityHidden(true)
@@ -180,25 +195,6 @@ public struct MainWindow: View {
             }
         }
 
-        // app-ui.md's skeleton: "activity — most recent daemon action, expandable". One row.
-        // Rendering five was a misreading of that line and it had a visible cost: the section
-        // grew tall enough to push the only two controls in the window off the bottom edge.
-        Section(Copy.activityTitle) {
-            if let latest = model.activity.first {
-                activityRow(latest)
-                if model.activity.count > 1 {
-                    // An explicit binding rather than DisclosureGroup's own state: it is the
-                    // one thing in this window that changes its height, so whether it is open
-                    // has to be inspectable to test that the window grows instead of clipping.
-                    DisclosureGroup(Copy.activityEarlier, isExpanded: $showEarlier) {
-                        ForEach(model.activity.dropFirst().prefix(9)) { activityRow($0) }
-                    }
-                }
-            } else {
-                Text(Copy.activityEmpty).foregroundStyle(.secondary)
-            }
-        }
-
         Section {
             HStack {
                 Button(Copy.changeMicrophone) { showingPicker = true }
@@ -210,15 +206,6 @@ public struct MainWindow: View {
         }
     }
 
-    private func activityRow(_ entry: Activity) -> some View {
-        LabeledContent {
-            Text(entry.at, style: .relative)
-                .foregroundStyle(.secondary)
-                .monospacedDigit()
-        } label: {
-            Text(model.sentence(for: entry))
-        }
-    }
 }
 
 // MARK: - Pieces
@@ -350,4 +337,11 @@ struct DevicePicker: View {
 
 #Preview("Needs approval") {
     MainWindow(model: .preview(agent: .needsApproval), onBannerAction: { _ in })
+}
+
+#Preview("Restore failed") {
+    MainWindow(model: .preview(currentInputUID: "uid-pods",
+                               activity: [Activity(at: Date(), kind: .problem(.restoreFailed),
+                                                   raw: "REVERT FAILED")]),
+               onBannerAction: { _ in })
 }

@@ -99,7 +99,7 @@ Targets marked `(planned)` do not exist yet — see the build order at the end o
 ```
 Sources/MicpegAudio/       # read-only CoreAudio helpers, shared. No writes.
 Sources/micpeg/main.swift  # daemon + CLI. Owns the only setDefaultInputDevice call.
-Sources/MicpegUI/          # the window: views, models, file/device watching, the level meter.
+Sources/MicpegUI/          # the windows: views, models, file/device watching, the level meter.
                            #   a library target, so #Preview registers with Xcode's canvas
 Sources/MicpegApp/         # @main, survey, migration, registration record. Thin.
 bundle/                    # Info.plist, agent plist, entitlements — inputs to bundle.sh
@@ -135,6 +135,7 @@ launchctl kill SIGHUP gui/$(id -u)/com.micpeg.agent # reload config
 /Applications/Micpeg.app/Contents/MacOS/MicpegApp repair    # unregister + register, confirmed
 /Applications/Micpeg.app/Contents/MacOS/MicpegApp link      # put micpeg on PATH, into the bundle
 /Applications/Micpeg.app/Contents/MacOS/MicpegApp meter     # RMS from the default input
+/Applications/Micpeg.app/Contents/MacOS/MicpegApp activity  # the Activity window's rows, as text
 ```
 
 **`survey` is the one to reach for.** `status` and `launchctl print` each answer a narrower
