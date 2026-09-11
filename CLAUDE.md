@@ -71,7 +71,9 @@ grepped a path that did not exist and reported a pass — the same shape of lie 
 daemon with dead listeners.
 
 It also holds `UserDefaults` to the two files that own the app's only stored values —
-`RegistrationRecord.swift` and `AppLanguage.swift`. And `scripts/l10n-check.sh`, also run by
+`RegistrationRecord.swift` and `AppLanguage.swift` — the daemon's imports to an allowlist
+(CoreAudio, Darwin, Foundation, MicpegAudio), since AudioToolbox can capture without ever saying
+`AVF`, and the app's file changes to its one deletion, the legacy plist in `Migration.swift`. And `scripts/l10n-check.sh`, also run by
 CI, fails when a string the compiler sees as localizable has no Korean entry, or when the daemon
 localizes anything: it runs from `Contents/MacOS`, so its `Bundle.main` is the app, and a
 translated log line is one `ActivityLog` cannot parse.

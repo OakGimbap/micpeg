@@ -9,7 +9,7 @@
 #   L="gui/$(id -u)/com.micpeg.agent"
 #   P=$(launchctl print "$L" | awk '/pid = /{print $3; exit}')
 #   ./scripts/leakcheck.sh $(( $(date +%s) + 86400 )) \
-#       "$(footprint -p $P | awk '/phys_footprint:/{print $2}')" \
+#       "$(footprint -f bytes -p $P | awk '/phys_footprint:/{print int($2 / 1024)}')" \
 #       "$(date '+%Y-%m-%d %H:%M:%S')" \
 #       "$(ps -o time= -p $P | tr -d ' ')" \
 #       "$(wc -l < ~/Library/Logs/micpeg.log | tr -d ' ')" &
@@ -35,7 +35,11 @@ P=$(launchctl print "$L" 2>/dev/null | awk '/pid = /{print $3; exit}')
   else
     ps -o pid,rss,time,etime -p "$P"
     echo
-    KB=$(footprint -p "$P" 2>/dev/null | awk '/phys_footprint:/{print $2}')
+    # `-f bytes`, then KB here. footprint's default format picks its own unit — `4769 KB`,
+    # and `16 MB` once it passes about 9.8 MiB — and taking the number without the unit read
+    # a 16 MB footprint as 16 KB, so the one check meant to catch a leak passed every leak big
+    # enough to matter.
+    KB=$(footprint -f bytes -p "$P" 2>/dev/null | awk '/phys_footprint:/{print int($2 / 1024)}')
     CPU=$(ps -o time= -p "$P" | tr -d ' ')
     RUNS=$(launchctl print "$L" 2>/dev/null | awk '/runs = /{print $3; exit}')
     # IDLEW is a LIFETIME COUNTER, not a per-sample rate. Reading it as a rate is what
@@ -59,15 +63,31 @@ P=$(launchctl print "$L" 2>/dev/null | awk '/pid = /{print $3; exit}')
     # Correctness, not just cost: on 2026-09-10 the daemon reported PINNED while the
     # default input actually sat on the Bluetooth headset for ~1.5h. A single daily
     # sample is a weak net for that, but it costs nothing to look.
-    ST=$(python3 -c "import json;d=json.load(open('$HOME/.config/micpeg/state.json'));print(d['state'],'|',d['target'],'|',d['currentInput'])" 2>/dev/null)
-    LIVE=$(micpeg status 2>/dev/null | awk -F': *' '/^default input/{print $2}' | sed 's/ \[.*//')
+    #
+    # Each field is read on its own and compared as a string. The first version split the
+    # `micpeg status` line on ':' and matched the result as a regex, and a device name can hold
+    # either: `Elgato Wave:1` became `Elgato Wave`, so every healthy run on the machine this was
+    # written for reported FAIL — the same output as the incident it exists to catch.
+    SF="$HOME/.config/micpeg/state.json"
+    field() { python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' "$SF" "$1" 2>/dev/null; }
+    STATE=$(field state); TARGET=$(field target); FILE_INPUT=$(field currentInput)
+    # The daemon's own executable — its first `txt` mapping — rather than whatever `micpeg` is
+    # on PATH: the app installs nothing there unless asked, and a missing CLI used to fail this
+    # check for every device.
+    CLI=$(lsof -p "$P" -a -d txt -Fn 2>/dev/null | awk '/^n/{print substr($0, 2); exit}')
+    LIVE=""
+    [ -n "$CLI" ] && LIVE=$("$CLI" status 2>/dev/null | sed -n 's/^default input: *//p' | sed -E 's/ \[[^]]*\]$//')
     echo "--- state consistency ---"
-    echo "  state file    : $ST"
-    echo "  live default  : $LIVE"
+    echo "  state file    : $STATE | $TARGET | $FILE_INPUT"
+    echo "  live default  : ${LIVE:-(could not be read)}   (from ${CLI:-no executable found} status)"
     MISMATCH=""
-    case "$ST" in
-      PINNED*) echo "$ST" | grep -q "| *$LIVE *\$" || MISMATCH="state=PINNED but live input differs from target" ;;
-    esac
+    if [ "$STATE" = "PINNED" ]; then
+      if [ -z "$LIVE" ]; then
+        MISMATCH="state=PINNED and the live default input could not be read"
+      elif [ "$LIVE" != "$TARGET" ]; then
+        MISMATCH="state=PINNED but live input differs from target"
+      fi
+    fi
     [ -n "$MISMATCH" ] && echo "  WARN: $MISMATCH" || echo "  consistent"
     echo
     V="PASS"

@@ -62,7 +62,7 @@ enforced by a grep in CI rather than by discipline:
 |---|---|
 | The app never writes to CoreAudio | `AudioObjectSetPropertyData` absent from `Sources/MicpegApp`, `Sources/MicpegUI`, `Sources/MicpegAudio` |
 | The daemon never touches the default output | `DefaultOutputDevice` absent from `Sources/micpeg`, `Sources/MicpegAudio` |
-| The daemon cannot open an audio stream | `AVFoundation` absent from `Sources/micpeg`, `Sources/MicpegAudio` |
+| The daemon cannot open an audio stream | `AVF`, `AudioDeviceCreateIOProc` and `AudioDeviceStart` absent from `Sources/micpeg`, `Sources/MicpegAudio`, whose imports are held to CoreAudio, Darwin, Foundation and MicpegAudio |
 
 The first replaces the old proof. Before the app existed, `grep -c DefaultOutputDevice
 Sources/micpeg/main.swift == 0` was the whole argument that micpeg does not meddle with audio
