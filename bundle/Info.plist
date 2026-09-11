@@ -16,6 +16,18 @@
     <key>CFBundleVersion</key>               <string>1</string>
     <key>CFBundleInfoDictionaryVersion</key> <string>6.0</string>
 
+    <!-- The language Sources/MicpegUI/Strings.swift is written in, and the languages that ship.
+         English has no table — its keys are its strings — so this list is what declares it;
+         scripts/bundle.sh checks that every other entry has a table and every table an entry.
+         Declaring Korean is also what lets AppKit's own menus follow the app into Korean, and
+         what lists Micpeg in System Settings › Language & Region › Applications. -->
+    <key>CFBundleDevelopmentRegion</key>     <string>en</string>
+    <key>CFBundleLocalizations</key>
+    <array>
+        <string>en</string>
+        <string>ko</string>
+    </array>
+
     <!-- docs/app-design.md, "Deployment target": @Observable is macOS 14. -->
     <key>LSMinimumSystemVersion</key>        <string>14.0</string>
     <key>NSHighResolutionCapable</key>       <true/>

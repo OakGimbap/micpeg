@@ -107,11 +107,13 @@ public final class AppModel {
 
     /// How many windows are currently relying on the watchers.
     ///
-    /// `WindowGroup` gives File ▸ New Window for free, and this model is one `@State` shared
-    /// by all of them — and by the Activity window. Stopping on the first `onDisappear`
-    /// released the HAL listeners and the watchers out from under every other window, and
-    /// `startWatching`'s guard meant they never came back: the surviving window kept showing
-    /// what it last read and silently stopped updating.
+    /// The main window and the Activity window share this one model and open and close
+    /// independently. Stopping on the first `onDisappear` released the HAL listeners and the
+    /// watchers out from under the other window, and `startWatching`'s guard meant they never
+    /// came back: the surviving window kept showing what it last read and silently stopped
+    /// updating. It was found with two main windows, when the main window was a `WindowGroup`
+    /// and File ▸ New Window made a second (verification.md §22). The main window is a single
+    /// `Window` now; the Activity window is the case that remains.
     private var watchers = 0
 
     /// Start watching. Separate from init so a preview can build a model without attaching

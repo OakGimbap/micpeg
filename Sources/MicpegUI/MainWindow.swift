@@ -27,6 +27,10 @@ import CoreAudio
 import SwiftUI
 
 public struct MainWindow: View {
+    /// The main window's scene. MicpegAppMain.swift declares it as a single `Window` and says
+    /// why it is not a `WindowGroup`.
+    public static let sceneID = "main"
+
     private let model: AppModel
     private let onBannerAction: (AppModel.Banner.Action) -> Void
     /// Called after the user chooses a microphone for the first time. Choosing writes the
@@ -73,13 +77,21 @@ public struct MainWindow: View {
             }
         }
         .formStyle(.grouped)
-        // Deliberately *not* .scrollDisabled(true). That was tried, on the theory that a Form
-        // would then size the window to its content; measured, it does not — the window stays
-        // at the same 460x586 and the content past the bottom edge is simply cut off. The
-        // action buttons were still in the accessibility tree, which is how the first pass
-        // missed it, and not on screen, which is what a screenshot showed. Scrolling is the
-        // safety net; keeping the content short enough not to need it is the design, and
-        // `.windowResizability(.contentSize)` still means there is nothing to resize.
+        // Scrolling off — and it is `.fixedSize` below that sizes the window, not this.
+        // `.scrollDisabled(true)` was first tried on its own, on the theory that a Form would
+        // then size the window to its content; measured, it does not — the window stays at the
+        // same 460x586 and the content past the bottom edge is simply cut off. The action
+        // buttons were still in the accessibility tree, which is how the first pass missed it,
+        // and not on screen, which is what a screenshot showed (verification.md §22).
+        //
+        // With `.fixedSize` doing the sizing, the scroll view had nothing to scroll to and
+        // scrolled anyway: the content was a fraction of a point taller than the window it
+        // sized, so the scroll bar had a point of travel. Disabled, the scroll bar is gone and
+        // the window still follows its content as the test hint comes and goes
+        // (verification.md §25). The cost is that content taller than the screen would be cut
+        // off rather than scroll; the longest state is the unconfigured list, a row per
+        // microphone. `.windowResizability(.contentSize)` still means there is nothing to resize.
+        .scrollDisabled(true)
         .frame(width: 460)
         .fixedSize(horizontal: false, vertical: true)
         .sheet(isPresented: $showingPicker) {
@@ -183,7 +195,9 @@ public struct MainWindow: View {
             }
         } footer: {
             if test.isRunning, test.isSilent {
-                Text("\(Copy.silenceWarning) \(model.silenceHint)")
+                // Verbatim: both halves are already translated, and a literal here would be a
+                // LocalizedStringKey, "%@ %@", looked up in the table and never found.
+                Text(verbatim: "\(Copy.silenceWarning) \(model.silenceHint)")
             } else if test.isRunning {
                 Text(Copy.testHint)
             } else if let failure = test.failure {

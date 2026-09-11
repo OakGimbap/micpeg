@@ -31,6 +31,11 @@ jobs:
       - name: Structural invariants
         run: ./scripts/invariants.sh
 
+      # Every string the app localizes has a Korean translation. The keys come from the
+      # compiler, not from a pattern over the source, and the script prints what it read.
+      - name: Translations complete
+        run: ./scripts/l10n-check.sh
+
       # The repo must never carry device identifiers. This is the enforcement.
       - name: No device identifiers committed
         run: |

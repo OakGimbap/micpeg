@@ -18,6 +18,7 @@ availability moves, and the system's visual language has changed materially in r
 | Layout, margins, spacing | https://developer.apple.com/design/human-interface-guidelines/layout |
 | Components (buttons, lists, labels) | https://developer.apple.com/design/human-interface-guidelines/components |
 | Writing / UI voice | https://developer.apple.com/design/human-interface-guidelines/writing |
+| Settings windows | https://developer.apple.com/design/human-interface-guidelines/settings — readable as `…/tutorials/data/design/human-interface-guidelines/settings.json` |
 | Accessibility | https://developer.apple.com/design/human-interface-guidelines/accessibility |
 | App icons | https://developer.apple.com/design/human-interface-guidelines/app-icons |
 | `Form`, `LabeledContent`, `Canvas` | https://developer.apple.com/documentation/swiftui |
@@ -52,21 +53,44 @@ Open System Settings → Sound → Input side by side while building. It is the 
 
 ## Language
 
-**UI strings are English.** The repository is English-primary (`README.md` is English,
-`README.ko.md` is the translation, and `CLAUDE.md` requires English identifiers and comments),
-and the app is being published for a general audience.
+**English is the development language, and Korean ships beside it.** The repository is
+English-primary (`README.md` is English, `README.ko.md` is the translation, and `CLAUDE.md`
+requires English identifiers and comments), so the English is written first, and it is the key
+the Korean is looked up by.
 
-Keep every user-facing string in one place so a Korean localization can follow without a
-rewrite. Do not hardcode strings inside view bodies.
+- Every user-facing string lives in `Sources/MicpegUI/Strings.swift` as `String(localized:)`.
+  Do not hardcode strings inside view bodies. A literal passed to `Text` or
+  `.accessibilityLabel` is itself a lookup key, so text that is already translated goes through
+  `Text(verbatim:)`.
+- The Korean is `bundle/ko.lproj/Localizable.strings`, copied into the bundle by `bundle.sh` and
+  found through `Bundle.main`. It is not a SwiftPM resource: the generated `Bundle.module` looks
+  at the root of the `.app`, where a bundle cannot be signed, and otherwise calls `fatalError`.
+- `scripts/l10n-check.sh` compares the keys the compiler extracts with the table and fails on a
+  missing one — whose silent form is one English sentence in a Korean window. CI runs it.
+- Korean follows `README.ko.md`'s register — statements in 합니다, instructions in 하세요 — and
+  macOS's own Korean for system terms. A device name is followed by 을(를), 이(가) or (으)로, as
+  macOS writes it, because its last sound is not known.
+- The choice is made in [Settings](#settings) and stored as `AppleLanguages` in the app's own
+  defaults domain: the key System Settings › Language & Region › Applications writes, so the two
+  are one setting. It takes effect when the app reopens, because the frameworks choose a bundle's
+  language as the process starts.
+- The daemon localizes nothing. Its log is a format `ActivityLog` parses.
 
 ## Window
 
-One window. `WindowGroup`, not `Settings` — this is the app's main window, not a preferences
-pane. Fixed to its content size (`.windowResizability(.contentSize)`); there is nothing to
-resize.
+One main window, and a `Window` scene — neither `WindowGroup` nor `Settings`. It is the app's
+main window, not a preferences pane, and there is exactly one of it. A `WindowGroup` put **File ▸
+New Micpeg Window (⌘N)** in the menu and made as many windows as it was asked for; hiding the
+command would have left the group able to make more, and a `Window` cannot. Window tabbing is off
+(`NSWindow.allowsAutomaticWindowTabbing = false`) for the same reason: View ▸ Show Tab Bar and
+Window ▸ Merge All Windows are the other way a Mac app grows windows. With a `Window` as the main
+scene SwiftUI builds no File menu at all; Close (⌘W) is in the Window menu
+([`verification.md`](verification.md) §24). Fixed to its content size
+(`.windowResizability(.contentSize)`), with scrolling disabled: there is nothing to resize, and
+nothing to scroll ([`verification.md`](verification.md) §25).
 
-The Activity window is the one other window, and the reason it is separate is this rule: see
-[Activity](#activity).
+Two other windows exist, once each: Activity, which is separate because of this rule (see
+[Activity](#activity)), and [Settings](#settings).
 
 Follow the HIG's macOS window margins rather than inventing spacing. Let `Form` supply the
 inner rhythm; do not add manual padding between its rows.
@@ -258,6 +282,52 @@ back", crediting Micpeg with the user's own choice: in the screenshot that promp
 section, all ten rows were the user or a daemon restart. `ActivityLog.swift` has the whole
 classification and the three facts about the log it rests on.
 
+## Settings
+
+⌘, — SwiftUI's `Settings` scene, which puts **Settings…** in the app menu. It holds the app's
+own preference, the way into Activity, and what Micpeg is. It is not a second place to choose the
+microphone; that stays in the main window.
+
+```
+┌──────────── Micpeg Settings ────────────┐
+│ ┌─────────────────────────────────────┐ │
+│ │ Language           System Language ⌄│ │
+│ │ Takes effect when…     [Reopen Now] │ │  ← only while the choice differs from launch
+│ └─────────────────────────────────────┘ │
+│ ┌─────────────────────────────────────┐ │
+│ │ Activity              [Show Activity]│ │
+│ │ Log File             [Show in Finder]│ │
+│ └─────────────────────────────────────┘ │
+│   Activity shows what happened to your  │
+│   microphone. The log file is the       │
+│   background helper's full record.      │
+│ ┌─────────────────────────────────────┐ │
+│ │ Version                    0.1.0 (1)│ │
+│ │ License          MIT License  [View]│ │
+│ │ Source Code  github.com/OakGimbap/… │ │
+│ └─────────────────────────────────────┘ │
+│   Micpeg uses no third-party code, so   │
+│   there are no other licenses to list.  │
+└─────────────────────────────────────────┘
+```
+
+- **One pane.** Apple's HIG: "If your settings window doesn't have multiple panes, use the title
+  *App Name* Settings." Seven rows do not need a toolbar, and panes would bring the same page's
+  "restore the most recently viewed pane" with them — one more stored value.
+- **Activity is a button, not a pane.** The same page: a settings window "accommodates the size
+  of the current pane, people don't need to expand the window". Activity is sized by the user.
+- **Languages are listed by their own names** — English, 한국어 — so that someone who cannot read
+  the window's current language can still find theirs.
+- **The license is the file.** `bundle.sh` copies `LICENSE` into the bundle, the row's name is
+  its first line, and **View** shows the rest, never translated. Micpeg has no dependencies, so
+  there is nothing else to acknowledge, and the footer says so.
+- The main window's container and sizing: `Form` + `.formStyle(.grouped)`, one width,
+  `.fixedSize(horizontal: false, vertical: true)`, scrolling disabled.
+
+The HIG sentences above were read from the page's DocC JSON,
+`developer.apple.com/tutorials/data/design/human-interface-guidelines/settings.json`, which
+answered where the rendered page did not.
+
 ## Container mapping
 
 Use the standard component in every case. This table is a starting point — confirm current
@@ -265,12 +335,14 @@ availability against Apple's documentation.
 
 | Element | API |
 |---|---|
-| Window | `WindowGroup` + `.windowResizability(.contentSize)` |
+| Window | `Window`, not `WindowGroup` + `.windowResizability(.contentSize)`; window tabbing off |
+| Settings | the `Settings` scene: one grouped `Form`, sized like the main window |
+| Text that is already translated | `Text(verbatim:)` — a literal is a lookup key |
 | Grouped rows | `Form { Section { … } }` + `.formStyle(.grouped)` |
 | Label/value row | `LabeledContent` |
 | Caption below a group | the section's footer |
 | Device list (sheet) | `List` + an inset list style |
-| Window sizing | `.frame(width:)` + `.fixedSize(horizontal: false, vertical: true)` on the `Form` — **not** `.scrollDisabled(true)`, which was specified here and, measured, leaves the window at a default height with the content clipped ([`verification.md`](verification.md) §22) |
+| Window sizing | `.frame(width:)` + `.fixedSize(horizontal: false, vertical: true)` on the `Form`, then `.scrollDisabled(true)`. `.fixedSize` is what sizes the window: `scrollDisabled` standing in for it, as this row once specified, left the window at a default height with the content clipped ([`verification.md`](verification.md) §22). Beside `.fixedSize` it only removes a scroll bar that had a point of travel (§25) |
 | Activity | its own `Window` scene with `.contentMinSize`; a `Form` with one `Section` per day, inside one `TimelineView` |
 | Primary action | `.buttonStyle(.borderedProminent)`, large control size |
 | Secondary action | `.buttonStyle(.bordered)` |

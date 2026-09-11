@@ -1245,3 +1245,95 @@ new summary said so in the meantime — "… is connected, but another microphon
 where the old ✓ would have claimed the opposite. A judgement on `dIn` always writes a line, so
 for that switch it either never ran or read the device from before the switch. Which one is
 open.
+
+#### 24. One main window, a Settings window, and Korean
+
+Prompted by File ▸ New Micpeg Window (⌘N), which should never have existed — §22 had already
+used it to open a second main window. Verified on the signed app in `/Applications`, read
+through the accessibility API.
+
+**The daemon was not replaced to do it.** The installed daemon was a thin arm64 build from
+before the last two daemon commits, so no build of HEAD could match its CDHash, and §23's
+`rsync --exclude` would have left a bundle whose seal named a daemon that was not there. The
+bundle was assembled around the installed daemon's own bytes instead — copied in, the outer
+bundle re-signed, `cmp` identical — and `rsync --checksum` skipped it: inode 116102148 and pid
+98353 before and after, `codesign --verify --strict --deep` passing, `survey` HEALTHY
+throughout.
+
+| Check | Result |
+|---|---|
+| File ▸ New Micpeg Window is gone | PASS — with a `Window` as the main scene SwiftUI builds **no File menu at all**; Close ⌘W is in the Window menu |
+| No other way to grow windows | PASS — View holds only Enter Full Screen; Window has no Merge All Windows and no tab items |
+| Settings… ⌘, is in the app menu and opens one window | PASS from the menu item — "Micpeg Settings", 460×407, minimize and zoom dimmed |
+| Settings rows do what they say | PASS — View shows the MIT text in a sheet and Done dismisses it; Show Activity opens the existing Activity window; Show in Finder brings Finder forward on `Logs` |
+| The picker lists each language once | **FAIL, then fixed** — `Bundle.localizations` returned `["en", "ko", "ko"]` |
+| Choosing writes the key System Settings uses | PASS — 한국어 → `defaults read com.micpeg.app AppleLanguages` is `(ko)`; System Language → the key is gone; the Reopen row appears and goes with it |
+| Reopen Now | PASS — a new process, the old one gone, the daemon's pid unchanged |
+| Korean after reopening | PASS — the app's menus (Micpeg에 관하여, 설정…, Micpeg 종료, 편집, 보기, 윈도우, 도움말), the main window, Settings ("Micpeg 설정"), Activity ("오늘", "오후 1:56") and `MicpegApp activity`; `-AppleLanguages '(en)'` still gives English |
+| A stored "ko-KR" reads as 한국어 | PASS against the bundle's localizations; "fr", which the bundle does not ship, reads as System Language |
+| Every localized key has a translation | PASS — 99 of 99, `scripts/l10n-check.sh` |
+
+**Four things only measurement found.**
+
+- **`Bundle.localizations` lists a language twice** when Info.plist names it in
+  `CFBundleLocalizations` and a `.lproj` exists for it, and the picker drew 한국어 twice with
+  duplicate ids. It is a set now. The same measurement settled that `CFBundleLocalizations`
+  alone declares English, which has no `.lproj`.
+- **The first draft of the new invariant was wrong about the code.** It excused
+  `AppLanguage.swift` alone, on the belief that the language was the first value the app stored,
+  and failed on `RegistrationRecord.swift` — stage 3's record of where the app registered from,
+  in the same defaults domain. It names both now.
+- **A literal passed to `.accessibilityLabel` was a lookup key.** The Activity row's label,
+  `"\(sentence) \(time)"`, was a `LocalizedStringKey`, `"%@ %@"`, looked up on every draw and
+  never found — correct only because a missing key falls back to itself. The compiler's
+  extraction showed it. It is `Text(verbatim:)` now, and still reads as the sentence and the time.
+- **SwiftPM's resource bundle cannot ship in an app.** The generated `Bundle.module` looks in the
+  root of the `.app`, and codesign refuses a bundle there — "unsealed contents present in the
+  bundle root", measured on a scratch app. The table is in `Contents/Resources`, read through
+  `Bundle.main`.
+
+**What the keyboard tests do not prove.** Key events posted to the process opened nothing for ⌘,
+either, although the menu item opens Settings, so "⌘N made no window" from that route is no
+evidence. Events posted through the HID event tap reach whatever is frontmost, and someone was
+using the Mac during this pass: between two checks another app came forward and the
+accessibility API listed none of Micpeg's windows, so the HID ⌘N was refused rather than sent to
+the other app. The evidence that ⌘N does nothing is the menu bar — no File menu, and no item
+bound to ⌘N. Pressing ⌘N and ⌘, on a keyboard remains to be done by hand.
+
+**Not done, for the same reason:** closing the main window with Settings open, to see whether the
+app quits as Apple's `Window` documentation says; Pause and Resume through the window, to watch
+`state.json` move; choosing the language in System Settings itself rather than writing the key;
+and the Korean microphone prompt, which needs `tccutil reset` and so clears a grant. Only the
+first is about behavior this change introduced.
+
+#### 25. Both windows scrolled
+
+Prompted by a screenshot of the Settings window and "it scrolls". It did, by a fraction of a
+point, and so did the main window. Each is sized to its content by `.fixedSize`, and in each the
+content came out a fraction taller than the window it sized. Through the accessibility API: the
+Settings window 460×407, a 374 pt scroll area, its rows from 526 to 860 — 20 pt insets on either
+side, filling the viewport exactly on paper; the main window 460×346, 314 pt, rows from 637 to
+911, the same. Setting the vertical scroll bar to its end moved the rows up by a point or less in
+both. That travel, with the rubber band a trackpad adds to it, was the scrolling.
+
+The fix is `.scrollDisabled(true)` on each Form, keeping the `.fixedSize` that sizes the window:
+
+| | Before | After |
+|---|---|---|
+| Vertical scroll bar | present, a point of travel | **absent** from the tree, in both windows |
+| Main window | 460×346 | 460×346 |
+| Main window, input test running | — | 460×390 with the hint below the meter; 346 again after Stop Test |
+| Settings | 460×407 | 460×407 |
+| Settings, Reopen row shown | — | 460×447, the last footer 20 pt above the bottom edge; 406 when it goes |
+
+Both windows still grow to fit what appears and shrink when it goes, so nothing is clipped. That
+was the failure §22 recorded for `scrollDisabled`, and §22 named `.fixedSize` "*without*
+`scrollDisabled`" as the combination that sizes the window. Measured now — with a `Window` scene,
+where §22 had a `WindowGroup` — `.fixedSize` sizes it with scrolling disabled too. What
+`scrollDisabled` cannot do is stand in for the sizing, which is what §22 tried first.
+
+The cost is that content taller than the screen would be cut off rather than scroll. The longest
+state is the unconfigured list, one row per microphone; it was not measured here.
+
+Scroll-wheel events posted to the process moved nothing before the fix either, so they are no
+evidence either way; the scroll bar's travel is.
