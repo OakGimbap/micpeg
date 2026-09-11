@@ -867,10 +867,14 @@ Both `install` and `uninstall` are refused, and `~/Library/LaunchAgents` stayed 
 
 #### What stage 3 did not do
 
-`repair()` is not run automatically when the app launches. The app surveys on launch and shows
-the verdict, and repairing is a button. Doing launchd surgery as a side effect of opening a
-window, with no interface yet to say what happened, is a stage 4 decision and should be made
-there deliberately rather than inherited from a test harness.
+`repair()` was not run automatically when the app launched. The app surveyed on launch and
+showed the verdict, and repairing was a button. Doing launchd surgery as a side effect of
+opening a window, with no interface yet to say what happened, is a stage 4 decision and should
+be made there deliberately rather than inherited from a test harness.
+
+**Stage 4 made it:** a `.moved` verdict is repaired at launch, and no other verdict is
+(`reconcile()` in `MicpegAppMain.swift`). §26 narrows what counts as moved, after a review
+found that a second copy of the app read as one.
 
 ---
 
@@ -1337,3 +1341,187 @@ state is the unconfigured list, one row per microphone; it was not measured here
 
 Scroll-wheel events posted to the process moved nothing before the fix either, so they are no
 evidence either way; the scroll bar's travel is.
+
+#### 26. What a whole-program review found
+
+A review of every file — `main` had no diff to review — reported fifteen findings and eleven
+smaller ones, and all of them were acted on. Most share the shape of the rest of this document: a
+check that reads one signal and says more than that signal can.
+
+**The window could pin AirPods on a fresh install.** With no `config.json` the app's blocklist was
+empty — a missing `blockTransports` decoded to `[]`, where the daemon's default is Bluetooth — so
+onboarding offered the headset macOS had just moved the input to, selected and unmarked. The app
+now falls back to the daemon's default, never pre-selects a device on a blocked transport, and
+asks before keeping one: app-ui.md's "warn and confirm", which nothing had implemented.
+
+**A second copy of the app took the registration.** The record of where the app registered is in
+the `com.micpeg.app` defaults domain, which every copy shares, and `.moved` was read from it before
+the running daemon's path. So a copy in the build directory, or on an update's disk image, read the
+installed copy's record as a move and repaired the registration over to itself at launch. `.moved`
+now needs the recorded bundle to be gone — not on disk, or in the Trash — and a daemon running from
+another installed copy is checked first. `build/Micpeg.app/Contents/MacOS/MicpegApp survey`, with
+the installed app running:
+
+| | verdict |
+|---|---|
+| before (the review's measurement) | `MOVED`, and repaired at launch |
+| after | `FOREIGN BUNDLE — … another copy that is still installed` |
+
+**Health rested on one pid.** `repair()` and `migrate()` returned the survey's verdict and dropped
+`waitForDaemon`'s NOT CONFIRMED, and the survey called a daemon running from this bundle healthy
+beside `SMAppService: notFound`. After a Finder move that daemon is the orphan still running on the
+inode the move carried (§2), and nothing will start it again. `ok` now needs the confirmation;
+`.healthy` needs `.enabled`, which is no evidence of health (§1) while anything else is evidence
+against it; and `repair()` from `.notFound` with a job present registers once before its
+unregister — the sequence §2 measured as the one that works.
+
+**A deliberate choice was reverted at every coreaudiod restart.** Four of the five full rebuilds in
+the log came 2.4–3.5 s after the state went `PINNED -> ABSENT`: the first `dev#` of a restart lists
+no devices at all. That expired a yield as "yielded device disappeared", so the guard that protects
+a yield through a rebuild never ran. An empty list no longer ends a yield.
+
+**Two daemon retries were unbounded or missing.** The retry for an unreadable default input — "re-
+evaluates once after 2 s", above — re-armed itself, so a Mac with no input device at all would have
+judged every 2 s and logged every time, with no state change to truncate the log. It now runs once
+per event, recognised by its trigger. And a refused revert armed nothing, since every timer in
+`revert()` follows a successful write: the wrong input stayed until an unrelated event. It now
+retries once, through `applyPin()` rather than `evaluate()`, which would take a non-Bluetooth input
+for a choice.
+
+**Smaller daemon changes.** `micpeg pick` replaces the priority list rather than moving to its
+front: the app's Change Microphone had been building a fallback chain nobody chose, against
+README's "does not force a fallback". The CLI's bundle guard also refuses when the label is held by
+the app's registration, whichever copy is asking — README's own Updating and Uninstall steps, run
+from `scripts/install.sh`'s build or the legacy `~/.local/bin` copy, booted the app's agent out. A
+side-effect-free copy of the check reports `registered: true, app: /Applications/Micpeg.app` here.
+The SIGHUP handler no longer leaves PAUSED without a line, which is what made Activity call a pick
+while paused "You paused Micpeg." The re-verify re-resolves its target instead of writing an ID
+captured a second earlier (principle 3). A state write that fails is tried again at the next
+transition. And the log stamp is `en_US_POSIX`:
+
+| Region | the stamp's year before | the app's POSIX parser read |
+|---|---|---|
+| Thailand | `2569` | 2569 |
+| Japanese calendar | `0008` | 0008 |
+| Islamic calendar | Arabic-Indic digits | 1448 |
+| any, after | `2026` | 2026 |
+
+None of the three was rejected, which is why the current-locale fallback the app carried for this
+case never ran. The fallback is gone.
+
+**The window.** The app's config decoder applies the daemon's rule — a key that is present must
+decode as the daemon's type. Copies of both decoders over twelve files (`null` values, `250.5` for
+an integer, `"input": null`, a top-level array, and so on):
+
+| | disagreements |
+|---|---|
+| before | 8 of 12 — four files the daemon rejects read as fine, four blocklists read as empty |
+| after | 0 of 12 |
+
+The model starts at `checking` instead of "the helper isn't running", and reads the files and
+devices as the window appears. Registration shows an informational `working` banner and runs one
+operation at a time. The summary no longer believes a stale `ABSENT`; a CLI refusal becomes one of
+the window's own sentences; the picker selects by UID, so a device replugged while it is open is
+not dropped; banner colours follow app-ui.md's table; the device watch re-installs its listeners
+after a coreaudiod restart; Activity's day sections have ids of their own.
+
+Activity, against log fixtures shaped like the daemon's output:
+
+| Log | installed build | this build |
+|---|---|---|
+| pause, two picks while paused (a daemon from before this change) | `paused ×3` | `paused` |
+| pause, two restarts while paused | `paused ×3` | `started ×2` |
+| a refused revert, then its retry | `· → MacBook…` | `AirPods Pro [blue] → MacBook…` |
+
+**Registration.** The legacy install is recognised by its job as well as its plist: a job under
+the label that ServiceManagement did not submit. The teardown stops rather than removing the plist
+while that job survives a bootout, and never boots out a job ServiceManagement submitted, so a
+stray plist beside a working registration (§8) costs the plist and nothing else. `migrate()` runs
+the unregister-and-register cycle that "One failure that could not be reproduced" asked for, and
+registers nothing when the teardown leaves a healthy registration behind.
+
+**Tooling.** `leakcheck.sh` reported FAIL for every healthy run pinned to a device with a colon in
+its name, and PASS for any leak past about 10 MB, where footprint changes its unit. `invariants.sh`
+passed planted capture code and planted file changes; it now holds the daemon's imports to an
+allowlist, forbids the CoreAudio IOProc calls and `DefaultSystemOutputDevice`, and confines the
+app's file changes to the one deletion in `Migration.swift`. On a tree with an `import
+AudioToolbox`, an IOProc, a `removeItem` and a `copyItem` planted in it, the old script passed and
+the new one fails four checks.
+
+**A second review, of this change.** Run against the diff before it was committed, it found three
+things the first draft of these fixes had wrong, all fixed:
+
+- Activity marked a start until the next transition, and a start with the kept microphone
+  unplugged writes none — so the user's pause an hour later read as "Micpeg started." A start is
+  now the line straight after the one that ends it, `system churn window armed … (daemon start)`.
+  A fixture of that shape reads `paused` here, where the first draft read `started`.
+- `run(_:)` and the launch repair took the survey's verdict and dropped `ok`, so a repair that did
+  not confirm could still show no banner. An unconfirmed operation is never shown as healthy now.
+- The legacy install was told apart from the app's registration by where its daemon's executable
+  lives, and after `MicpegApp link` a hand-written job runs the bundle's own binary through the
+  symlink: migration would have left it running, deleted its plist and registered nothing.
+  `managed_by` decides now — the one field of `launchctl print` that decides anything, and the
+  header of `InstallSurvey.swift` says why that direction is the safe one.
+
+And five smaller ones. A refused write no longer counts toward the loop guard, so a refusal and its
+retry cannot trip "something else is contending". applyPin()'s retry for an unreadable input goes
+back through applyPin() rather than evaluate(), which could yield to an input nobody chose
+(principle 4). A daemon that runs with nothing to start it again — the Finder-move orphan — is
+"won't start again", not "isn't running". `migrate()` no longer tries to register while the item is
+switched off in Login Items. And the yield comment claims no more than the log shows. A resume with
+the kept microphone unplugged still reads only "isn't connected" in Activity: true, and before this
+change it read nothing at all.
+
+**Verified here:** `swift build`, and the universal release build CI runs; a signed
+host-architecture bundle; `invariants.sh`, 29 checks; `l10n-check.sh`, 108 keys of 108; the
+read-only survey, the Activity fixtures, the decoder comparison and the label-holder check above.
+
+**Then installed.** The universal build replaced `/Applications/Micpeg.app` in place, and
+`MicpegApp repair` — the re-registration SMAppService.h recommends after an executable changes —
+went through the new cycle: `unregister(completionHandler:): no error`, `register()`, `confirmed
+after 0s: pid 93485 (was 98353)`, HEALTHY. With the kept microphone unplugged and AirPods holding
+the input, through the bundled CLI:
+
+```
+20:29:50.559 system churn window armed for 15s (daemon start)     ← a start with nothing to pin: no transition
+20:30:13.456 ABSENT -> PAUSED: disabled in config                  ← micpeg off
+20:30:29.965 SIGHUP — reloading config                             ← micpeg pick while paused: "replaced:  Elgato Wave:1"
+20:30:29.965 config loaded (1 priority entries, block=bluetooth,bluetoothle)
+20:30:45.786 PAUSED -> ABSENT: no configured input device present  ← the original config back, SIGHUP
+```
+
+No line for the pick, where the daemon before this change wrote a second `ABSENT -> PAUSED`; and a
+line for the resume, where it wrote none. `MicpegApp activity` read the real log as `paused`, then
+`disconnected`, and nothing for the start or the pick. The default input stayed on the AirPods
+throughout, and `config.json` was restored byte for byte.
+
+**And in the window.** Reopened after the install and read through the accessibility API, with
+the kept microphone still unplugged:
+
+```
+Window «Micpeg» 460x346                       ← no banner
+  «Output» «MacBook Pro Speakers»
+  «Input»  «MacBook Pro Microphone»
+  «Elgato Wave:1 isn't connected. It will be selected again when it is.»
+  «Start Test» «Change Microphone» «Pause»
+```
+
+No banner is what `checking` buys: the model starts there rather than at "the background helper
+isn't running", so the launch survey's verdict is the first thing the window says about the agent.
+Change Microphone opened its sheet on the two connected inputs, each with its transport
+(«MW's iPhone Microphone, ccwd», «MacBook Pro Microphone, bltn»), and Cancel closed it. The
+confirmation before keeping a blocked device could not be exercised: it needs a Bluetooth device
+connected, and there was none.
+
+**Not yet observed**, because each needs an event this session did not provoke:
+
+- The daemon, running: `sudo killall coreaudiod` while standing aside for a non-Bluetooth
+  microphone, where the choice should survive; the only input unplugged on a Mac with no built-in
+  microphone, where one `re-judging in 2s` should be followed by silence. A refused revert has
+  never happened on hardware at all.
+- The window: the confirmation before keeping a blocked device, the `working` and "won't start
+  again" banners, and the picker across a replug.
+  It was not opened. A mistake in the new verdict would have repaired the real registration from
+  the build directory, and the survey alone could show the verdict without that risk.
+- Registration: a Finder move, a move away and back, a second copy while the first runs, and a
+  legacy install with and without its plist.
