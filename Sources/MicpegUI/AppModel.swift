@@ -198,6 +198,13 @@ public final class AppModel {
         return first.name ?? first.uid
     }
 
+    /// The chosen device, as a device rather than a name — nil when it is not connected.
+    /// The picker opens on it so the user can see what is currently kept before changing it.
+    public var pinnedDevice: AudioDevice? {
+        guard let uid = pinned?.priority.first?.uid else { return nil }
+        return inputs.first { $0.uid == uid }
+    }
+
     public var targetIsConnected: Bool {
         guard let uid = pinned?.priority.first?.uid else { return false }
         return inputs.contains { $0.uid == uid }

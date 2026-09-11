@@ -1060,6 +1060,44 @@ configured for a non-Gregorian calendar it writes a year the app's POSIX parser 
 "Recent activity" empties out. The one-line fix is in the daemon and the daemon is finished, so
 the app parses with the current locale as a fallback instead.
 
+#### 22. Looking at it
+
+The screen was unlocked and the window opened: 460x483, CPU 0.3% — the 38% spin was the locked
+session, which the screenshot settles for good.
+
+**Three things only a screenshot found.**
+
+The window was **clipping its own content**. `.scrollDisabled(true)` had been added on the
+theory that a `Form` would then size the window to its content; measured, it does not — the
+window stayed at 460x586 and everything past the bottom edge was simply cut off, which was
+`Change Microphone` and `Pause`, the only two controls in the window. They were still in the
+accessibility tree, which is exactly why the earlier pass passed them: **being in the tree is
+not being on screen.** The combination that does size a window to its content is
+`.fixedSize(horizontal: false, vertical: true)` *without* `scrollDisabled` — 460x483 collapsed,
+growing to 460x819 with the activity list expanded, and scrolling rather than clipping if it
+ever exceeds the screen.
+
+The activity section rendered **five rows**. app-ui.md's skeleton says "activity — most recent
+daemon action, expandable", which is one. Five is what pushed the controls off the bottom.
+
+The device picker opened with **nothing selected**. Removing the "no selection means the
+current input" rule from the list — correctly, it contradicted the sheet's Done button — left
+the sheet with no seed of its own, so a user opening "Change Microphone" could not see which
+microphone they already had. It opens on the kept device now.
+
+**What was exercised, and what it did.** Pause: the summary became "Micpeg is paused. Your
+microphone can change freely.", the button became Resume, `micpeg status` read
+`enabled: false`; Resume reversed all three. A device stolen by another program moved the Input
+row and the summary and added "Moved your microphone back to Elgato Wave:1 from MacBook Pro
+Microphone." to the activity list, with the window open and untouched. Start Test opened the
+microphone and the meter ran — three screenshots 0.7 s apart all differed, which is the only
+way a still picture can show a meter is live — and Stop released it.
+
+**File ▸ New Micpeg Window exists**, so the multi-window case in the correctness review was
+real rather than theoretical: opened a second window, closed it, and the survivor still
+followed a device change in both directions. Without the reference count on the watchers it
+would have gone quiet.
+
 **A note on a false alarm.** During this pass the app appeared to launch with no window and
 spin at 38% CPU. The committed build did the same, which is what identified it: the screen was
 locked (`CGSSessionScreenIsLocked = Yes`), and a locked session does not realise a new app's

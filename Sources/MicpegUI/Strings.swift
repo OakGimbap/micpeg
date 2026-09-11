@@ -121,6 +121,7 @@ public enum Copy {
 
     public static let activityTitle = "Recent activity"
     public static let activityEmpty = "Nothing yet."
+    public static let activityEarlier = "Earlier"
     public static func restored(to device: String, displacing other: String?) -> String {
         if let other { return "Moved your microphone back to \(device) from \(other)." }
         return "Moved your microphone back to \(device)."
