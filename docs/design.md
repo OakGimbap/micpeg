@@ -169,7 +169,7 @@ Measured effect: **10.1 ms → 0.070 ms per filtered event, a 145× reduction.**
 |---|---|---|
 | `ABSENT` | No configured target present | Completely inert |
 | `PINNED` | Target present, watching | Reverses blocked-transport transitions only |
-| `YIELDED` | User chose something else | Inert until the target reconnects, `micpeg on`, or the yielded-to device disappears |
+| `YIELDED` | User chose something else | The device list stops re-applying the pin until the target reconnects, `micpeg on`, or the yielded-to device disappears — and a list that empties while `coreaudiod` restarts is not a disappearance. The default input is still judged: another choice moves the yield, and an automatic switch to a blocked device reverts to the target |
 | `PAUSED` | `micpeg off` | Inert |
 | `BACKOFF` | 3 reverts within 5 s | 60 s inert + a loud warning |
 

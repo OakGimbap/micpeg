@@ -21,8 +21,15 @@ let agentLabel = "com.micpeg.agent"
 
 // MARK: - Logging
 
+/// `en_US_POSIX`, because a fixed format string is otherwise read in the user's locale and
+/// calendar. Measured: with the region set to Thailand this wrote the Buddhist year 2569, with a
+/// Japanese calendar 0008, and with an Islamic one Arabic-Indic digits — and the app parses these
+/// stamps (ActivityLog, and `updated` in state.json) with a POSIX parser that accepted all three
+/// as Gregorian years instead of rejecting them, so every row on a Thai-region Mac read
+/// "Just now".
 private let stampFormatter: DateFormatter = {
     let f = DateFormatter()
+    f.locale = Locale(identifier: "en_US_POSIX")
     f.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS"
     return f
 }()
@@ -305,6 +312,11 @@ final class Daemon {
     var debounceFirstAt: Date?
     /// One-shot re-judgement guard. Bounded and self-disarming: no steady-state timer.
     var reconcileArmed = false
+    /// One-shot guard for the retry after a write CoreAudio refused. See `retryRevertOnce()`.
+    var revertRetryArmed = false
+    /// One-shot guard for applyPin()'s retry after an unreadable default input. See
+    /// `handleUnreadableDefault(_:pinning:)`.
+    var pinRetryArmed = false
 
     // MARK: Listener plumbing
 
@@ -431,8 +443,18 @@ final class Daemon {
         for uid in removed { arrivals.removeValue(forKey: uid) }
 
         if state == .yielded {
-            if let y = yieldedTo, removed.contains(y) {
+            if let y = yieldedTo, !current.isEmpty, !current.contains(y) {
                 // The device the user picked is gone; the yield has nothing to protect.
+                //
+                // Judged against the list as it is now, and never against an empty one. A list
+                // with nothing in it is coreaudiod going away, not the device: four of the five
+                // full rebuilds in the log came 2.4-3.5 s after the state went PINNED -> ABSENT
+                // for want of any device. Expired there, the yield reached the rebuild with the
+                // state already ABSENT, so the guard below never ran, and the user's choice was
+                // reverted at every coreaudiod restart. `current` rather than `removed`, so a
+                // device missing from the rebuilt list still ends the yield there — and so would
+                // one that republished after the rebuild rather than in it. Every rebuild in the
+                // log arrived whole; a piecemeal one has not been seen.
                 yieldedTo = nil
                 transition(.pinned, "yielded device disappeared")
             } else if !isRebuild, targetUIDs().contains(where: { added.contains($0) }) {
@@ -482,6 +504,57 @@ final class Daemon {
             guard let self else { return }
             self.reconcileArmed = false
             self.evaluate(trigger: why)
+        }
+    }
+
+    /// The trigger the one re-judgement for an unreadable default input carries, which is also
+    /// how it is recognised. See `handleUnreadableDefault(_:)`.
+    static let unreadableRetry = "unreadable default"
+
+    /// The default input could not be read. Try once more, 2 s later — once: the retry carries
+    /// its own trigger and arms no other. verification.md records this retry as "re-evaluates
+    /// once after 2 s", and it re-armed itself instead, so a Mac with no input device at all —
+    /// a Mac mini whose one microphone is unplugged — judged every 2 s and logged every time,
+    /// for as long as that lasted, with no state change ever to truncate the log. The next audio
+    /// event gets a retry of its own.
+    ///
+    /// The retry goes back the way it came. From applyPin() — `pinning` — it is applyPin()
+    /// again, which judges no yield. It was a full evaluate(), so an unreadable moment after a
+    /// SIGHUP could end in a yield to an input nobody chose: principle 4, and the reason the
+    /// revert retry below goes through applyPin() as well.
+    func handleUnreadableDefault(_ trigger: String, pinning: Bool = false) {
+        guard trigger != Daemon.unreadableRetry else {
+            log("default input still unreadable; waiting for the next audio event")
+            return
+        }
+        log("default input unreadable; re-judging in 2s")
+        guard pinning else {
+            scheduleReconcile(Daemon.unreadableRetry, after: 2.0)
+            return
+        }
+        guard !pinRetryArmed else { return }
+        pinRetryArmed = true
+        work.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+            guard let self else { return }
+            self.pinRetryArmed = false
+            self.applyPin(reason: Daemon.unreadableRetry)
+        }
+    }
+
+    /// One more attempt after CoreAudio refuses a write. Nothing else would make it: a refused
+    /// set changes no property, so no 'dIn ' follows, and every timer in `revert(to:reason:)` is
+    /// armed only by a write that succeeded — the wrong input stayed selected until some
+    /// unrelated event came along. Through applyPin(), not evaluate(): the input still selected
+    /// is not a choice anyone made, and evaluate() would take a non-Bluetooth one for exactly
+    /// that and yield to it. One-shot, like the other re-judgements: the retry's own failure
+    /// arms nothing.
+    func retryRevertOnce() {
+        guard !revertRetryArmed else { return }
+        revertRetryArmed = true
+        work.asyncAfter(deadline: .now() + config.reverifyDelaySeconds) { [weak self] in
+            guard let self else { return }
+            self.applyPin(reason: "revert retry")
+            self.revertRetryArmed = false
         }
     }
 
@@ -544,8 +617,7 @@ final class Daemon {
         guard config.enabled else { transition(.paused, "disabled in config"); return }
         guard let current = defaultInputDevice() else {
             // Returning here consumed the notification and nothing would ever retry.
-            log("default input unreadable; re-judging in 2s")
-            scheduleReconcile("unreadable default", after: 2.0)
+            handleUnreadableDefault(trigger)
             return
         }
 
@@ -628,8 +700,7 @@ final class Daemon {
         }
         inputScopeRetries = 0
         guard let current = defaultInputDevice() else {
-            log("default input unreadable; re-judging in 2s")
-            scheduleReconcile("unreadable default", after: 2.0)
+            handleUnreadableDefault(reason, pinning: true)
             return
         }
         if current == target {
@@ -658,9 +729,12 @@ final class Daemon {
             backoffUntil = nil
         }
 
+        // Writes that took, not attempts. A write CoreAudio refused moves nothing, and counted, it
+        // and its one retry left a third "revert" in five seconds to any unrelated event — a LOOP
+        // GUARD blaming something else for a refusal. For writes that succeed this is the guard
+        // it always was: the third inside five seconds is not made.
         revertTimes = revertTimes.filter { now.timeIntervalSince($0) < 5 }
-        revertTimes.append(now)
-        if revertTimes.count >= 3 {
+        if revertTimes.count >= 2 {
             let until = now.addingTimeInterval(60)
             backoffUntil = until
             revertTimes.removeAll()
@@ -677,8 +751,10 @@ final class Daemon {
         guard st == noErr else {
             expectedSelfWrite = nil
             log("REVERT FAILED status=\(osStatusText(st))")
+            retryRevertOnce()
             return
         }
+        revertTimes.append(now)
         lastWriteAt = now
         log("REVERT -> \(deviceName(target)) (\(reason))")
         transition(.pinned, reason)
@@ -687,7 +763,11 @@ final class Daemon {
         // a re-assertion swallowed inside the debounce window.
         work.asyncAfter(deadline: .now() + config.reverifyDelaySeconds) { [weak self] in
             guard let self, self.state == .pinned else { return }
-            guard let cur = defaultInputDevice(), cur != target else { return }
+            // Resolved again rather than captured (CLAUDE.md, principle 3). A second has passed,
+            // and in it the config can have named another device, or this one been replugged
+            // under a reused ID — writing the captured one would select whatever holds it now.
+            guard let target = self.resolveTarget(),
+                  let cur = defaultInputDevice(), cur != target else { return }
             let at = Date()
             self.expectedSelfWrite = (target, at)
             let st = setDefaultInputDevice(target)
@@ -745,8 +825,9 @@ final class Daemon {
         // reason still fixes the stale-hold bug this replaced, because `micpeg on`
         // always arrives with a new reason.
         guard changed || why != lastWrittenReason else { return }
-        lastWrittenReason = why
-        writeState(reason: why)
+        // Recorded once it is on disk, not before. Set first, a write that failed was never
+        // tried again: the next transition with the same state and reason found it written.
+        if writeState(reason: why) { lastWrittenReason = why }
     }
 
     // MARK: Bookkeeping
@@ -788,7 +869,9 @@ final class Daemon {
         }
     }
 
-    func writeState(reason: String) {
+    /// True when the file is on disk. `transition()` records the reason only then.
+    @discardableResult
+    func writeState(reason: String) -> Bool {
         let target = resolveTarget().map { deviceName($0) } ?? "(absent)"
         let cur = defaultInputDevice().map { deviceName($0) } ?? "(none)"
         let sf = StateFile(state: state.rawValue, reason: reason, target: target,
@@ -801,6 +884,7 @@ final class Daemon {
                                                     withIntermediateDirectories: true)
             try enc.encode(sf).write(to: statePath, options: .atomic)
             stateWriteFailed = false
+            return true
         } catch {
             // Logged once per failure run: silently dropping this made `micpeg status`
             // claim the daemon had never run while it was pinning correctly.
@@ -809,6 +893,7 @@ final class Daemon {
                 log("WARNING: cannot write \(statePath.path): \(error) — `micpeg status` "
                   + "will report stale state until this is fixed")
             }
+            return false
         }
     }
 
@@ -908,16 +993,9 @@ func runningExecutable() -> URL? {
     return fm.isExecutableFile(atPath: u.path) ? u.resolvingSymlinksInPath() : nil
 }
 
-/// The .app enclosing the running executable, if there is one.
-///
-/// runningExecutable() resolves symlinks, and that is load-bearing rather than tidy:
-/// measured on macOS 26, running the CLI through a symlink in ~/.local/bin leaves
-/// Bundle.main.bundlePath pointing at ~/.local/bin, not at the app. A check that
-/// skipped the resolution would miss precisely the case this exists to catch — a user
-/// with the bundled CLI on their PATH.
-func enclosingAppBundle() -> URL? {
-    guard let exe = runningExecutable() else { return nil }
-    var dir = exe.deletingLastPathComponent()
+/// The .app enclosing an executable, if there is one.
+func enclosingAppBundle(of executable: URL) -> URL? {
+    var dir = executable.deletingLastPathComponent()
     while dir.path != "/" {
         if dir.pathExtension == "app" { return dir }
         let parent = dir.deletingLastPathComponent()
@@ -927,20 +1005,69 @@ func enclosingAppBundle() -> URL? {
     return nil
 }
 
+/// The .app enclosing the running executable, if there is one.
+///
+/// runningExecutable() resolves symlinks, and that is load-bearing rather than tidy:
+/// measured on macOS 26, running the CLI through a symlink in ~/.local/bin leaves
+/// Bundle.main.bundlePath pointing at ~/.local/bin, not at the app. A check that
+/// skipped the resolution would miss precisely the case this exists to catch — a user
+/// with the bundled CLI on their PATH.
+func enclosingAppBundle() -> URL? {
+    runningExecutable().flatMap(enclosingAppBundle(of:))
+}
+
+/// Whether the agent holding the label is the one Micpeg.app registered, whichever copy of
+/// micpeg is asking. Two signals, and either is enough, because refusing is the safe direction:
+/// launchd's `managed_by`, which it prints for a ServiceManagement job and leaves out for a
+/// hand-written one (docs/verification.md §9), and the running daemon's own executable, when it
+/// sits inside an .app. The second also names the app, for the message.
+func agentRegisteredByApp() -> (registered: Bool, app: URL?) {
+    let (st, out) = runTool("/bin/launchctl", ["print", serviceTarget])
+    guard st == 0 else { return (false, nil) }
+    let lines = out.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+    var app: URL?
+    if let pid = lines.first(where: { $0.hasPrefix("pid = ") })
+        .flatMap({ pid_t($0.dropFirst("pid = ".count)) }) {
+        var path = [CChar](repeating: 0, count: 4096)  // PROC_PIDPATHINFO_MAXSIZE
+        if proc_pidpath(pid, &path, UInt32(path.count)) > 0 {
+            app = enclosingAppBundle(of: URL(fileURLWithPath: String(cString: path)))
+        }
+    }
+    return (lines.contains("managed_by = com.apple.xpc.ServiceManagement") || app != nil, app)
+}
+
 /// One registration path, enforced rather than documented. `micpeg install` writes the
 /// legacy plist under the same label the app registers through SMAppService, and the
 /// collision that follows is silent in both directions — measured, docs/verification.md.
 /// The app cannot see the plist unless it goes looking for it, and launchd will not
 /// honour the plist while a Background Task Management record holds the label.
-func refuseInsideBundle(_ command: String) {
-    guard let app = enclosingAppBundle() else { return }
-    let appName = app.lastPathComponent
-    print("error: this copy of micpeg lives inside \(appName), which registers the")
-    print("       background agent itself. `micpeg \(command)` manages the separate,")
-    print("       hand-written LaunchAgent under the same label, and one label cannot")
-    print("       have two registration paths. The collision is silent: nothing would")
-    print("       report an error and the microphone would quietly stop being pinned.")
-    print("       Open \(appName) to turn the agent on or off.")
+///
+/// There are two ways to be the wrong copy, and this used to check only one: where this binary
+/// lives. A copy outside the app — the one scripts/install.sh builds, or the legacy
+/// ~/.local/bin/micpeg that migration deliberately leaves in place — passed, and README's own
+/// Updating and Uninstall steps then booted the app's agent out. Who holds the label is the
+/// other half.
+func refuseIfTheAppManagesTheAgent(_ command: String) {
+    if let app = enclosingAppBundle() {
+        let appName = app.lastPathComponent
+        print("error: this copy of micpeg lives inside \(appName), which registers the")
+        print("       background agent itself. `micpeg \(command)` manages the separate,")
+        print("       hand-written LaunchAgent under the same label, and one label cannot")
+        print("       have two registration paths. The collision is silent: nothing would")
+        print("       report an error and the microphone would quietly stop being pinned.")
+        print("       Open \(appName) to turn the agent on or off.")
+        exit(1)
+    }
+    let holder = agentRegisteredByApp()
+    guard holder.registered else { return }
+    let appName = holder.app?.lastPathComponent ?? "Micpeg.app"
+    print("error: the background agent on this Mac was registered by \(appName).")
+    print("       `micpeg \(command)` manages the separate, hand-written LaunchAgent under")
+    print("       the same label, and running it would boot the app's agent out. Use")
+    print("       \(appName) instead, or remove it in System Settings > General >")
+    print("       Login Items & Extensions. If the app has already been deleted, its agent")
+    print("       can outlive it (docs/verification.md §3); `launchctl bootout \(serviceTarget)`")
+    print("       clears that.")
     exit(1)
 }
 
@@ -968,9 +1095,12 @@ func cmdStatus() {
     case .missing:
         print("enabled:       (no config — run: micpeg install)")
     case .corrupt(let why):
+        // Not "its last good settings": that is true of a daemon that loaded a good file
+        // before this one broke, and false of one started since, which holds Config.fallback
+        // and no target (`reloadConfigIfNeeded()`).
         print("enabled:       CONFIG MALFORMED — \(why)")
-        print("               the daemon is running on its last good settings;")
-        print("               fix or delete \(configPath.path)")
+        print("               the daemon keeps the settings it last loaded — none, if it")
+        print("               has restarted since; fix or delete \(configPath.path)")
     }
 
     let cur = defaultInputDevice()
@@ -1050,13 +1180,21 @@ func cmdPick(_ requestedUID: String?) {
     let name = deviceName(id)
     var cfg = configForMutation()
     warnIfTargetIsBlocked(id, cfg)
-    cfg.input.priority.removeAll { $0.uid == uid }
-    cfg.input.priority.insert(DeviceRef(uid: uid, name: name), at: 0)
+    // The pick replaces the list; it used to move to the front of it. Kept, every earlier pick
+    // became a fallback nobody chose: the app names one microphone, so after Change Microphone
+    // the one it replaced went on being forced whenever the new one was unplugged — README's
+    // "does not force a fallback", broken by the command it documents. A chain is still a
+    // hand edit of `input.priority` away, and this says what it dropped from one.
+    let dropped = cfg.input.priority.filter { $0.uid != uid }
+    cfg.input.priority = [DeviceRef(uid: uid, name: name)]
     do { try cfg.save() } catch {
         print("error: could not write config: \(error)"); exit(1)
     }
     print("pinned to: \(name)")
     print("uid:       \(uid)")
+    if !dropped.isEmpty {
+        print("replaced:  \(dropped.map { $0.name ?? $0.uid ?? "?" }.joined(separator: ", "))")
+    }
     nudgeDaemon()
 }
 
@@ -1114,7 +1252,7 @@ func cmdLink(force: Bool) {
 }
 
 func cmdInstall() {
-    refuseInsideBundle("install")
+    refuseIfTheAppManagesTheAgent("install")
     let fm = FileManager.default
 
     // launchd would otherwise crash-loop forever on a path that does not exist while
@@ -1202,7 +1340,7 @@ func cmdInstall() {
 }
 
 func cmdUninstall() {
-    refuseInsideBundle("uninstall")
+    refuseIfTheAppManagesTheAgent("uninstall")
     let (st, out) = runTool("/bin/launchctl", ["bootout", serviceTarget])
     print(st == 0 ? "booted out \(serviceTarget)"
                   : "note: bootout returned \(st): \(out.trimmingCharacters(in: .whitespacesAndNewlines))")
@@ -1232,7 +1370,13 @@ func cmdDaemon() {
         // An explicit `micpeg on` is the user's remedy for every hold, so it has to
         // clear all of them — a backoff left in place made the command inert while
         // the mic stayed wrong.
-        if daemon.state == .yielded || daemon.state == .paused || daemon.state == .backoff {
+        //
+        // PAUSED is left for applyPin() to leave, which it does with a line saying so. Reset
+        // here without one, the log never said PAUSED had ended: a pick while paused came out
+        // as `ABSENT -> PAUSED`, which Activity could only read as the user pausing again, and
+        // a resume with the kept microphone unplugged wrote nothing at all. applyPin() stops
+        // only at YIELDED, so it needs no reset to act from PAUSED.
+        if daemon.state == .yielded || daemon.state == .backoff {
             daemon.state = .absent
             daemon.yieldedTo = nil
         }
