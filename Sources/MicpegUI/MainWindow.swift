@@ -75,14 +75,20 @@ public struct MainWindow: View {
                 }
             }
 
-            switch model.body {
-            case .unconfigured: unconfigured
-            // Same body: the daemon is still enforcing the settings it loaded last, so the
-            // rows and the meter are all true. The banner says what is wrong with the file.
-            case .configured, .settingsUnreadable: configured
+            // Nothing until the files and devices have been read once: `model.body` starts at
+            // unconfigured, and the first frame used to be onboarding for someone who had chosen
+            // a microphone long before.
+            if model.hasLoaded {
+                switch model.body {
+                case .unconfigured: unconfigured
+                // Same body: the rows and the meter describe the machine as it is, which is true
+                // whatever the file says. The banner says what is wrong with the file.
+                case .configured, .settingsUnreadable: configured
+                }
             }
         }
         .formStyle(.grouped)
+        .confirmsBlockedChoice($blockedChoice, keep: keepFirst)
         // Scrolling off — and it is `.fixedSize` below that sizes the window, not this.
         // `.scrollDisabled(true)` was first tried on its own, on the theory that a Form would
         // then size the window to its content; measured, it does not — the window stays at the
@@ -140,16 +146,20 @@ public struct MainWindow: View {
                 // what nil means. The sheet's Done button reads nil as "nothing chosen" and
                 // disables itself; a list that also drew the current input as selected while
                 // the binding was nil made the two disagree.
-                .task { pendingChoice = pendingChoice ?? model.currentInput?.id }
+                //
+                // Seeded from `suggestedChoice`, not the current input: on a fresh install that
+                // is often the headset macOS has just moved it to.
+                .task { pendingChoice = pendingChoice ?? model.suggestedChoice?.uid }
         } footer: {
             Text(Copy.deviceListFooter)
         }
         Section {
             Button(Copy.keepButton(pendingChoiceName)) {
                 guard let device = pendingDevice else { return }
-                Task {
-                    errorMessage = await model.pick(device)
-                    if errorMessage == nil { onFirstChoice() }
+                if model.isBlocked(device) {
+                    blockedChoice = device
+                } else {
+                    keepFirst(device)
                 }
             }
             .buttonStyle(.borderedProminent)
@@ -162,12 +172,22 @@ public struct MainWindow: View {
         }
     }
 
-    @State private var pendingChoice: AudioDeviceID?
+    @State private var pendingChoice: String?
+    @State private var blockedChoice: AudioDevice?
 
     private var pendingDevice: AudioDevice? {
-        model.inputs.first { $0.id == pendingChoice }
+        model.inputs.first { $0.uid != nil && $0.uid == pendingChoice }
     }
     private var pendingChoiceName: String { pendingDevice?.name ?? Copy.noDevice }
+
+    /// The first choice, written through the CLI; then the app target is asked to register the
+    /// agent that will keep it.
+    private func keepFirst(_ device: AudioDevice) {
+        Task {
+            errorMessage = await model.pick(device)
+            if errorMessage == nil { onFirstChoice() }
+        }
+    }
 
     // MARK: - Configured
 
@@ -269,15 +289,23 @@ struct BannerRow: View {
 @MainActor
 struct DeviceList: View {
     let model: AppModel
-    @Binding var selection: AudioDeviceID?
+    /// A UID, not an `AudioDeviceID`. IDs are reused across reconnects (CLAUDE.md, principle 3),
+    /// so a device replugged while the list was open came back under a new one and the selection
+    /// pointed at nothing — the sheet's Done then closed without keeping anything. A device with
+    /// no UID cannot be pinned, so it cannot be selected either.
+    @Binding var selection: String?
+
+    private func isSelected(_ device: AudioDevice) -> Bool {
+        device.uid != nil && device.uid == selection
+    }
 
     var body: some View {
         ForEach(model.inputs) { device in
             Button {
-                selection = device.id
+                selection = device.uid
             } label: {
                 HStack {
-                    Image(systemName: selection == device.id
+                    Image(systemName: isSelected(device)
                           ? "largecircle.fill.circle" : "circle")
                         .foregroundStyle(.tint)
                         .accessibilityHidden(true)
@@ -296,7 +324,8 @@ struct DeviceList: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityAddTraits(selection == device.id ? [.isSelected] : [])
+            .disabled(device.uid == nil)
+            .accessibilityAddTraits(isSelected(device) ? [.isSelected] : [])
         }
     }
 }
@@ -306,7 +335,16 @@ struct DevicePicker: View {
     let model: AppModel
     let onChoose: (AudioDevice) -> Void
     @Environment(\.dismiss) private var dismiss
-    @State private var selection: AudioDeviceID?
+    @State private var selection: String?
+    @State private var blockedChoice: AudioDevice?
+
+    /// Looked up by UID on every draw, so a device replugged while the sheet is open is found
+    /// under its new ID, and Done is disabled while the chosen one is not connected. It used to
+    /// match the ID the sheet opened with, find nothing after a replug, and close without
+    /// keeping anything.
+    private var selectedDevice: AudioDevice? {
+        model.inputs.first { $0.uid != nil && $0.uid == selection }
+    }
 
     var body: some View {
         VStack(alignment: .leading) {
@@ -320,7 +358,7 @@ struct DevicePicker: View {
             // radio buttons and the user could not tell which microphone they already had —
             // and Done stayed disabled until they picked one, so "change my mind" meant
             // Cancel rather than seeing the current choice and leaving it alone.
-            .task { selection = selection ?? model.pinnedDevice?.id ?? model.currentInput?.id }
+            .task { selection = selection ?? model.pinnedDevice?.uid ?? model.suggestedChoice?.uid }
             Text(Copy.deviceListFooter)
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -328,17 +366,49 @@ struct DevicePicker: View {
                 Spacer()
                 Button(Copy.cancel) { dismiss() }
                 Button(Copy.done) {
-                    if let device = model.inputs.first(where: { $0.id == selection }) {
-                        onChoose(device)
+                    guard let device = selectedDevice else { return }
+                    if model.isBlocked(device) {
+                        blockedChoice = device
+                    } else {
+                        choose(device)
                     }
-                    dismiss()
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(selection == nil)
+                .disabled(selectedDevice == nil)
             }
         }
         .padding()
         .frame(width: 380)
+        .confirmsBlockedChoice($blockedChoice, keep: choose)
+    }
+
+    private func choose(_ device: AudioDevice) {
+        onChoose(device)
+        dismiss()
+    }
+}
+
+extension View {
+    /// app-ui.md, Unconfigured: pinning a device on a blocked transport "produces an agent that
+    /// can never act … Match that behavior: warn and confirm, do not silently disable." Both
+    /// places a microphone is chosen ask here, once, before keeping one. Neither did: onboarding
+    /// showed a ⚠ only where a settings file already existed, and the CLI's own warning was
+    /// dropped because `pick` succeeds.
+    @MainActor
+    fileprivate func confirmsBlockedChoice(_ device: Binding<AudioDevice?>,
+                                           keep: @escaping (AudioDevice) -> Void) -> some View {
+        confirmationDialog(
+            device.wrappedValue.map { Copy.keepBlockedTitle($0.name) } ?? "",
+            isPresented: Binding(get: { device.wrappedValue != nil },
+                                 set: { if !$0 { device.wrappedValue = nil } }),
+            titleVisibility: .visible,
+            presenting: device.wrappedValue
+        ) { chosen in
+            Button(Copy.keepAnyway) { keep(chosen) }
+            Button(Copy.cancel, role: .cancel) {}
+        } message: { chosen in
+            Text(Copy.blockedDeviceWarning(chosen.name))
+        }
     }
 }
 

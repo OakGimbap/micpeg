@@ -46,7 +46,7 @@ public struct ActivityWindow: View {
 
     private func list(now: Date) -> some View {
         Form {
-            ForEach(ActivityTime.days(model.activity, now: now), id: \.title) { day in
+            ForEach(ActivityTime.days(model.activity, now: now)) { day in
                 Section(day.title) {
                     ForEach(day.entries) { ActivityRow(entry: $0, now: now, model: model) }
                 }
@@ -76,9 +76,15 @@ public enum ActivityTime {
         return date.formatted(.dateTime.weekday(.wide).month(.abbreviated).day())
     }
 
-    public struct Day {
+    public struct Day: Identifiable {
         public let title: String
         public var entries: [Activity]
+        /// The oldest entry's id: unique, and steady while new entries arrive at the top. The
+        /// title is neither. The log stamps local time with no zone, so after a time-zone change
+        /// — or across a daylight-saving fall-back — its lines are no longer in time order, the
+        /// same title can come round twice, and a `ForEach` keyed on it had two sections with
+        /// one identity.
+        public var id: String { entries.last?.id ?? title }
     }
 
     /// Newest first in, newest day first out. Computed per tick rather than stored, because

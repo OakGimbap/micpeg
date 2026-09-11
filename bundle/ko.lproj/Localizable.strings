@@ -32,7 +32,7 @@
 "%@ is connected, but another microphone is in use." = "%@이(가) 연결되어 있지만 다른 마이크를 사용 중입니다.";
 "Micpeg is paused. Your microphone can change freely." = "Micpeg이 일시 정지되었습니다. 마이크가 자유롭게 바뀔 수 있습니다.";
 "No microphone is chosen yet." = "아직 선택한 마이크가 없습니다.";
-"Micpeg is still using the settings it loaded last." = "Micpeg은 마지막으로 불러온 설정을 계속 사용하고 있습니다.";
+"Until its settings file is fixed, Micpeg may not be keeping any microphone." = "설정 파일을 고치기 전까지는 Micpeg이 어떤 마이크도 유지하지 않고 있을 수 있습니다.";
 
 /* Banners */
 "Another program keeps changing your microphone" = "다른 프로그램이 계속 마이크를 바꾸고 있습니다";
@@ -43,6 +43,8 @@
 "The background helper isn't running" = "백그라운드 도우미가 실행되고 있지 않습니다";
 "Your microphone isn't being kept. Reconnecting usually fixes it." = "마이크가 유지되지 않고 있습니다. 대개 다시 연결하면 해결됩니다.";
 "Reconnect" = "다시 연결";
+"The background helper won't start again" = "백그라운드 도우미가 다시 시작되지 않습니다";
+"It's running now, but nothing will start it again once it stops. Reconnecting usually fixes it." = "지금은 실행 중이지만, 멈추면 다시 시작해 줄 것이 없습니다. 대개 다시 연결하면 해결됩니다.";
 "An older installation is still set up" = "이전 설치가 아직 남아 있습니다";
 "It was installed from the command line and needs to be replaced before this app can take over." = "명령줄에서 설치된 것으로, 이 앱이 이어받으려면 먼저 교체해야 합니다.";
 "Replace It" = "교체";
@@ -51,11 +53,15 @@
 "Micpeg was moved from %@. Its background helper has been reconnected." = "Micpeg이 %@에서 옮겨졌습니다. 백그라운드 도우미를 다시 연결했습니다.";
 "Micpeg reconnected after being moved" = "옮겨진 Micpeg을 다시 연결했습니다";
 "%@ connects over Bluetooth, which Micpeg is set to ignore. Keeping it would leave nothing to do." = "%@은(는) 블루투스로 연결되는데, Micpeg은 블루투스 장치를 무시하도록 설정되어 있습니다. 이 마이크를 유지하면 Micpeg이 할 일이 없습니다.";
+"Keep %@?" = "%@을(를) 유지할까요?";
+"Keep Anyway" = "그래도 유지";
 "Your microphone couldn't be switched back" = "마이크를 되돌리지 못했습니다";
 "Micpeg tried to select %@, and macOS didn't accept the change." = "Micpeg이 %@을(를) 선택하려 했지만 macOS가 변경을 받아들이지 않았습니다.";
 "Show Activity" = "활동 보기";
 "Micpeg's settings file can't be read" = "Micpeg 설정 파일을 읽을 수 없습니다";
-"The background helper is still using the settings it loaded last. Fix or remove the file to change them." = "백그라운드 도우미는 마지막으로 불러온 설정을 계속 사용합니다. 설정을 바꾸려면 파일을 고치거나 삭제하세요.";
+"The background helper keeps the settings it loaded last, and has none if it has restarted since. Fix or remove the file." = "백그라운드 도우미는 마지막으로 불러온 설정을 유지하지만, 그 뒤에 다시 시작했다면 설정이 없습니다. 파일을 고치거나 삭제하세요.";
+"Setting up the background helper" = "백그라운드 도우미를 설정하는 중";
+"This can take a few seconds." = "몇 초 정도 걸릴 수 있습니다.";
 
 /* Actions */
 "Change Microphone" = "마이크 변경";
@@ -114,6 +120,9 @@
 "This microphone isn't providing any audio channels right now." = "이 마이크는 지금 오디오 채널을 제공하지 않습니다.";
 "The microphone could not be opened: %@" = "마이크를 열 수 없습니다: %@";
 "That device has no identifier to pin." = "그 장치에는 고정할 식별자가 없습니다.";
+"%@ isn't connected any more." = "%@이(가) 더 이상 연결되어 있지 않습니다.";
+"Micpeg's settings file can't be read, so nothing was changed." = "Micpeg 설정 파일을 읽을 수 없어서 아무것도 바꾸지 않았습니다.";
+"Micpeg couldn't make that change." = "Micpeg이 그 변경을 하지 못했습니다.";
 
 /* Settings */
 "Language" = "언어";

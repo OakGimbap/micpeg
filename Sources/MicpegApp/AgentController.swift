@@ -28,6 +28,7 @@
 
 import Foundation
 import MicpegUI
+import os
 import ServiceManagement
 
 /// Not a controller any more: a namespace.
@@ -36,8 +37,12 @@ import ServiceManagement
 /// built for the stage 2 harness window's "Copy transcript" button. Stage 4 deleted that
 /// window and the transcript became write-only: an `App`-level `@State` object SwiftUI
 /// observed, accumulating evidence with no way to read it back. Evidence with no retrieval
-/// path is not evidence, so the operations now report to stderr, where `log show --predicate
-/// 'process == "MicpegApp"'` can find them even for a copy launched from the Finder.
+/// path is not evidence, so the operations report to the unified log, where
+/// `log show --predicate 'subsystem == "com.micpeg.app"'` finds them.
+///
+/// They went to stderr first, on the belief that `log show` would find that. It does not: the
+/// unified log never sees stderr, and an app opened from the Finder has it on /dev/null, so
+/// every transcript of every launch repair was discarded.
 enum AgentController {
     /// The launchd label — the hand-written LaunchAgent's too, on purpose. See
     /// docs/app-design.md, "The label stays".
@@ -49,14 +54,17 @@ enum AgentController {
 
     static var service: SMAppService { SMAppService.agent(plistName: plistName) }
 
+    private static let log = Logger(subsystem: "com.micpeg.app", category: "registration")
+
     /// What a migration or repair actually did. The window shows a one-line verdict; this is
-    /// the evidence behind it, and the reason it goes to stderr rather than into memory is
-    /// above.
+    /// the evidence behind it, and why it goes to the unified log is above. One entry a line,
+    /// and public: a transcript is paths and verdicts, and a redacted one is no evidence.
     static func report(_ outcome: Migration.Outcome, label: String) {
-        var text = "\(label): "
-            + (outcome.ok ? "reached a healthy state" : "DID NOT reach a healthy state") + "\n"
-        for line in outcome.lines { text += "  " + line + "\n" }
-        FileHandle.standardError.write(Data(text.utf8))
+        let verdict = outcome.ok ? "reached a healthy state" : "DID NOT reach a healthy state"
+        log.notice("\(label, privacy: .public): \(verdict, privacy: .public)")
+        for line in outcome.lines {
+            log.notice("  \(line, privacy: .public)")
+        }
     }
 
     /// The only correct response to `.requiresApproval`. Measured in stage 2: `register()`

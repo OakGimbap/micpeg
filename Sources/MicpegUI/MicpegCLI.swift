@@ -15,11 +15,15 @@ import Foundation
 public struct MicpegCLI: Sendable {
     public let executable: URL
 
-    /// The daemon inside this app bundle. The one place that path is spelled: it was written
-    /// out in four, and a bundle layout change that missed one would still build and would
-    /// silently kill only the window's write path.
-    public static var bundledExecutable: URL {
-        Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/micpeg")
+    /// The daemon inside this app bundle.
+    public static var bundledExecutable: URL { executable(inBundle: Bundle.main.bundleURL) }
+
+    /// The daemon inside any copy of the app — the survey asks about the copy it registered
+    /// from. The one place that path is spelled: it was written out in four, and a bundle layout
+    /// change that missed one would still build and would silently kill only the window's write
+    /// path.
+    public static func executable(inBundle bundle: URL) -> URL {
+        bundle.appendingPathComponent("Contents/MacOS/micpeg")
     }
 
     /// That copy, never whatever is on PATH. A user's `~/.local/bin` symlink may point at a

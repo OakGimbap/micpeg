@@ -15,6 +15,7 @@
 import Foundation
 import CoreAudio
 import MicpegAudio
+import os
 
 @MainActor
 @Observable
@@ -22,6 +23,14 @@ public final class AppModel {
 
     /// The app target's verdict, reduced to what the window needs to say.
     public enum AgentCondition: Equatable, Sendable {
+        /// Not known yet: the survey that decides it has not come back. The window says nothing
+        /// about the agent until it has. The model used to start at `notKeeping`, so a
+        /// configured window opened on "The background helper isn't running".
+        case checking
+        /// The app is registering or repairing the agent right now — up to half a minute. The
+        /// window said the helper was not running through all of it, and offered a Reconnect
+        /// that started a second operation on top of the first.
+        case working
         /// Registered here and the daemon is running out of this bundle.
         case healthy
         /// Switched off in Login Items. Measured in stage 2: code cannot undo this.
@@ -31,6 +40,10 @@ public final class AppModel {
         /// Nothing is keeping the microphone: not registered, or registered and unspawnable.
         /// One condition because it is one sentence to the user and one repair.
         case notKeeping
+        /// A daemon is running and nothing will start it again once it stops: the orphan a Finder
+        /// move leaves (verification.md §2), or one whose copy of the app is gone. Not
+        /// `notKeeping`, whose sentence says the helper isn't running; the repair is the same.
+        case orphaned
         /// A *different* copy of Micpeg registered the agent and its daemon is running.
         ///
         /// Deliberately not folded into `notKeeping`. The helper is running, so
@@ -83,7 +96,11 @@ public final class AppModel {
 
     // MARK: - Observable state
 
-    public private(set) var agent: AgentCondition = .notKeeping
+    public private(set) var agent: AgentCondition = .checking
+    /// Whether the files and devices have been read once. Until then the window draws no body:
+    /// `config` starts at `.missing`, and the first frame used to be onboarding — "Keep None" —
+    /// for someone who had chosen a microphone long before.
+    public private(set) var hasLoaded = false
     public private(set) var daemon: DaemonState?
     public private(set) var config: PinnedConfig.ReadResult = .missing
     public private(set) var inputs: [AudioDevice] = []
@@ -98,7 +115,7 @@ public final class AppModel {
     private var deviceWatch: DeviceWatch?
     private let cli: MicpegCLI
 
-    /// Does no I/O. The window's `.task` loads everything once it is on screen, and the
+    /// Does no I/O. `startWatching()` loads everything as the first window appears, and the
     /// watchers fire on attach — three separate full reloads happened before the first frame
     /// until this was left empty.
     public init(cli: MicpegCLI = .bundled) {
@@ -121,6 +138,11 @@ public final class AppModel {
     public func startWatching() {
         watchers += 1
         guard fileWatch == nil else { return }
+        // Everything, once, now. Nothing else read the files or the devices until the launch
+        // survey had come back — the watches below fire only after their coalescing delay, and
+        // the HAL listeners not until something changes — so the first frames were drawn from a
+        // model that had read nothing.
+        reloadAll()
         fileWatch = PathWatch(DaemonPaths.directory, kind: .directory) { [weak self] in
             self?.reloadState()
         }
@@ -158,6 +180,7 @@ public final class AppModel {
         reloadState()
         reloadActivity()
         reloadDevices()
+        hasLoaded = true
     }
 
     /// `state.json` and `config.json` — on the directory watch, and after every CLI call.
@@ -245,9 +268,11 @@ public final class AppModel {
         switch daemon?.kind {
         case .yielded:
             return Copy.standingBySummary(daemon?.currentInput ?? Copy.noDevice, target: target)
-        case .absent:
-            return Copy.waitingSummary(target)
-        case .pinned, .backoff, .paused, .unknown, .none:
+        // ABSENT among the rest, read from what is connected now. It is the daemon's word and it
+        // can be stale: a revert CoreAudio refused leaves it there with the kept microphone
+        // plugged in, and the window said that microphone "isn't connected" under a banner
+        // saying it could not be selected.
+        case .absent, .pinned, .backoff, .paused, .unknown, .none:
             guard targetIsConnected else { return Copy.waitingSummary(target) }
             return inputIsTarget ? Copy.activeSummary(target) : Copy.notInUseSummary(target)
         }
@@ -261,9 +286,17 @@ public final class AppModel {
         // condition happened to be noticed first — the earlier version guarded only the
         // not-registered case, so a new user opening the app on a machine with a stale launchd
         // job was told their microphone was not being kept when they had not picked one.
-        let hasSomethingToEnforce = body == .configured
+        //
+        // An unreadable settings file is not that case. Someone chose a microphone once, and
+        // whether the helper runs is still the first thing they need to know — treated as
+        // unconfigured here, a broken file hid a helper that was not running at all.
+        let hasSomethingToEnforce = body != .unconfigured
 
         // First, nothing is running to keep the microphone at all.
+        //
+        // Red for approval, and for the conflict below, and for nothing else: app-ui.md reserves
+        // it "exclusively for BACKOFF and approval failure", and this had the conflict orange and
+        // the helper-isn't-running banner red.
         switch agent {
         case .needsApproval:
             return Banner(severity: .failure, title: Copy.approvalTitle,
@@ -273,10 +306,19 @@ public final class AppModel {
                           body: Copy.legacyBody, action: .migrateLegacy)
         case .notKeeping:
             if hasSomethingToEnforce {
-                return Banner(severity: .failure, title: Copy.notRunningTitle,
+                return Banner(severity: .warning, title: Copy.notRunningTitle,
                               body: Copy.notRunningBody, action: .repairAgent)
             }
-        case .otherCopyRunning, .repairedAfterMove, .healthy:
+        case .orphaned:
+            if hasSomethingToEnforce {
+                return Banner(severity: .warning, title: Copy.orphanedTitle,
+                              body: Copy.orphanedBody, action: .repairAgent)
+            }
+        case .working:
+            // No button. The operation under way is the remedy the other banners offer.
+            return Banner(severity: .informational, title: Copy.workingTitle,
+                          body: Copy.workingBody)
+        case .checking, .otherCopyRunning, .repairedAfterMove, .healthy:
             break
         }
 
@@ -291,7 +333,8 @@ public final class AppModel {
         case .repairedAfterMove(let from):
             return Banner(severity: .informational, title: Copy.movedTitle,
                           body: Copy.movedBody(from))
-        case .needsApproval, .legacyPresent, .notKeeping, .healthy:
+        case .checking, .working, .needsApproval, .legacyPresent, .notKeeping, .orphaned,
+             .healthy:
             break
         }
 
@@ -300,7 +343,7 @@ public final class AppModel {
                           body: Copy.configUnreadableBody)
         }
         if daemon?.kind == .backoff {
-            return Banner(severity: .warning, title: Copy.conflictTitle,
+            return Banner(severity: .failure, title: Copy.conflictTitle,
                           body: Copy.conflictBody)
         }
         return nil
@@ -339,8 +382,8 @@ public final class AppModel {
 
     // MARK: - Mutations, all through the CLI
 
-    /// Returns the CLI's message when it refuses, so the window can show it rather than
-    /// silently doing nothing.
+    /// Returns a sentence when the CLI refuses, so the window can say so rather than silently
+    /// doing nothing.
     ///
     /// `async` because the CLI call is a fork, an exec, a CoreAudio enumeration, a file write
     /// and a signal. Run inline it froze the window — including the 30 Hz meter — for the
@@ -348,25 +391,57 @@ public final class AppModel {
     @discardableResult
     public func pick(_ device: AudioDevice) async -> String? {
         guard let uid = device.uid else { return Copy.deviceHasNoIdentifier }
-        return await mutate { $0.pick(uid: uid) }
+        return await mutate(device) { $0.pick(uid: uid) }
     }
 
     @discardableResult
     public func setPaused(_ paused: Bool) async -> String? {
-        await mutate { $0.setEnabled(!paused) }
+        await mutate(nil) { $0.setEnabled(!paused) }
     }
 
+    private static let log = Logger(subsystem: "com.micpeg.app", category: "cli")
+
     /// The CLI call off the main actor, then a fresh read of what it changed.
-    private func mutate(_ call: @escaping @Sendable (MicpegCLI) -> MicpegCLI.Result) async
+    ///
+    /// A refusal comes back as one of the window's own sentences, not the CLI's output. That is
+    /// written for a terminal, with the paths and decoding dumps app-ui.md keeps out of the
+    /// window, and it was shown whole. The cause is read back the way the window reads
+    /// everything — from the settings file and the devices — rather than parsed out of text
+    /// meant for a person, and the text itself goes to the unified log.
+    private func mutate(_ device: AudioDevice?,
+                        _ call: @escaping @Sendable (MicpegCLI) -> MicpegCLI.Result) async
         -> String? {
         let cli = self.cli
         let result = await Task.detached(priority: .userInitiated) { call(cli) }.value
         reloadState()
-        return result.ok ? nil : result.output
+        guard !result.ok else { return nil }
+        Self.log.error("micpeg refused: \(result.output, privacy: .public)")
+        if case .unreadable = config { return Copy.changeFailedSettings }
+        if let device {
+            reloadDevices()
+            if !inputs.contains(where: { $0.uid == device.uid }) {
+                return Copy.changeFailedDisconnected(device.name)
+            }
+        }
+        return Copy.changeFailed
     }
 
+    /// The microphone the onboarding list and the picker open on when nothing is kept yet: the
+    /// input in use, unless it is on a transport Micpeg is set to undo. On a fresh install that
+    /// input is often the headset macOS has just moved it to, and offering it pre-selected made
+    /// one click pin AirPods.
+    public var suggestedChoice: AudioDevice? {
+        guard let current = currentInput, current.uid != nil, !isBlocked(current) else {
+            return nil
+        }
+        return current
+    }
+
+    /// With no readable settings, the daemon's default blocklist — which is what the daemon
+    /// enforces when it has none either.
     public func isBlocked(_ device: AudioDevice) -> Bool {
-        pinned?.blockedTransportCodes.contains(device.transportCode) ?? false
+        (pinned?.blockedTransportCodes ?? PinnedConfig.defaultBlockedTransportCodes)
+            .contains(device.transportCode)
     }
 
     // MARK: - Previews
