@@ -58,22 +58,31 @@ public final class InputTest {
         return min(1, max(0, (db - floorDB) / -floorDB))
     }
 
-    public private(set) var isRunning = false
+    public var isRunning: Bool { phase == .running }
     public private(set) var levels = [Float](repeating: 0, count: InputTest.slots)
     public private(set) var isSilent = false
     public private(set) var failure: String?
 
+    /// One variable for the lifecycle. It was three booleans — running, starting, and whether
+    /// a stop had arrived while starting — kept in step by hand at five sites, and the double
+    /// start `start()` describes lived in the combinations they allowed that meant nothing.
+    private enum Phase { case idle, awaitingPermission, running }
+    private var phase = Phase.idle
+
     private var engine: AVAudioEngine?
     private var timer: Timer?
     private var observer: NSObjectProtocol?
-    private var restart: DispatchWorkItem?
     private var quietSince: Date?
-    /// A permission request is in flight. Separate from `isRunning`, which only becomes true
-    /// once an engine exists.
-    private var isStarting = false
-    /// Cleared by `stop()`, so a stop during an in-flight permission request is honoured when
-    /// the callback lands instead of starting anyway.
-    private var wantsToRun = false
+
+    /// A device change moves the default input more than once, and restarting on the first
+    /// configuration change would tear the engine down again on the second. `DaemonTiming`
+    /// holds the measurement.
+    @ObservationIgnored
+    private lazy var restart = Coalescer(delay: DaemonTiming.engineRestart) { [weak self] in
+        guard let self, self.isRunning else { return }
+        self.stop()
+        self.reallyStart()
+    }
 
     /// Written from the audio thread, read from the main actor. A tap callback must not touch
     /// observable state — SwiftUI would be asked to redraw from a real-time thread — so the
@@ -90,24 +99,23 @@ public final class InputTest {
     // MARK: - Control
 
     public func start() {
-        guard !isRunning, !isStarting else { return }
-        isStarting = true
-        wantsToRun = true
+        guard phase == .idle else { return }
+        phase = .awaitingPermission
         failure = nil
         // app-ui.md: request permission when the user starts a test, never at launch. A
         // permission prompt during onboarding, for a capability not yet in use, costs installs.
         AVAudioApplication.requestRecordPermission { [weak self] granted in
             Task { @MainActor in
-                guard let self else { return }
-                // The guard in start() ran before this callback, and `isRunning` is only set
-                // below — so two presses, or a press while the TCC prompt is up, both arrive
-                // here. Without re-checking, the second reallyStart() would overwrite the
-                // engine, the observer and the timer with no teardown, and stop() could then
-                // only ever reach the second: the first engine would keep its tap installed
-                // with the microphone indicator lit and no control left to turn it off.
-                self.isStarting = false
-                guard self.wantsToRun, !self.isRunning else { return }
+                // Only a request still awaited may start an engine. A stop() while the TCC
+                // prompt is up returns the phase to idle, and a press after that makes a second
+                // request whose callback also lands here — after the first has started an
+                // engine. Starting again would overwrite the engine, the observer and the timer
+                // with no teardown, and stop() could then only ever reach the second: the first
+                // engine would keep its tap installed with the microphone indicator lit and no
+                // control left to turn it off.
+                guard let self, self.phase == .awaitingPermission else { return }
                 guard granted else {
+                    self.phase = .idle
                     self.failure = Copy.microphonePermissionDenied
                     return
                 }
@@ -117,10 +125,8 @@ public final class InputTest {
     }
 
     public func stop() {
-        wantsToRun = false
-        isStarting = false
-        restart?.cancel()
-        restart = nil
+        phase = .idle
+        restart.cancel()
         timer?.invalidate()
         timer = nil
         if let observer {
@@ -130,7 +136,6 @@ public final class InputTest {
         engine?.inputNode.removeTap(onBus: 0)
         engine?.stop()
         engine = nil
-        isRunning = false
         isSilent = false
         quietSince = nil
         levels = [Float](repeating: 0, count: Self.slots)
@@ -141,11 +146,12 @@ public final class InputTest {
     private func reallyStart() {
         // Idempotent by construction rather than by the callers being careful. Anything that
         // reaches here with an engine already running tears it down first.
-        if engine != nil { stop(); wantsToRun = true }
+        if engine != nil { stop() }
         switch Self.openTap(onBuffer: { [latest] buffer in
             latest.set(Self.level(fromRMS: Self.rms(of: buffer)))
         }) {
         case .failure(let error):
+            phase = .idle
             failure = error.message
             return
         case .success(let engine):
@@ -155,11 +161,11 @@ public final class InputTest {
             ) { [weak self] _ in
                 // Do nothing here. The header is explicit that tearing the engine down inside
                 // this callback can deadlock, because it arrives on an internal dispatch queue.
-                Task { @MainActor in self?.scheduleRestart() }
+                Task { @MainActor in self?.restart.schedule() }
             }
         }
 
-        isRunning = true
+        phase = .running
         quietSince = Date()
         // 30 Hz, and the redraw happens here rather than in the tap. app-ui.md: "never draw
         // from the tap callback".
@@ -172,23 +178,6 @@ public final class InputTest {
         // .common so the meter keeps moving while a menu or a sheet is tracking.
         RunLoop.main.add(t, forMode: .common)
         timer = t
-    }
-
-    /// Restarting on the first configuration change would tear the engine down again on the
-    /// second: a device change moves the default input more than once. `DaemonTiming` holds
-    /// the measurement.
-    private func scheduleRestart() {
-        restart?.cancel()
-        let work = DispatchWorkItem { [weak self] in
-            Task { @MainActor in
-                guard let self, self.isRunning else { return }
-                self.stop()
-                self.reallyStart()
-            }
-        }
-        restart = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + DaemonTiming.engineRestart,
-                                      execute: work)
     }
 
     private func sample() {

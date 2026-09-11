@@ -14,8 +14,8 @@
 //   - "If an app updates either the plist or the executable ... the SMAppService must be
 //      re-registered or it may not launch. It is recommended to also call unregister before
 //      re-registering if the executable has been changed."  That last sentence is why
-//      reregister() exists and why it uses the completion-handler form: the header says the
-//      handler runs after the old process has been killed, and only then "it is safe to
+//      unregisterAndWait() exists and why it uses the completion-handler form: the header says
+//      the handler runs after the old process has been killed, and only then "it is safe to
 //      re-register the service".
 //
 // register() returning without throwing is not evidence that the agent runs. The header is
@@ -23,10 +23,11 @@
 // lists exactly that as one of this app's silent failures. Stage 3 settled where that check
 // belongs: Migration.swift re-surveys after every operation and confirms with a pid, that
 // pid's executable inside this bundle, and a state.json written after the call. What is left
-// here is the pieces that have no better home — the plist name, the error and status
-// vocabulary, and the one operation that is pure ServiceManagement.
+// here is the pieces that have no better home — the label and plist name, the error and status
+// vocabulary, and the operations that are pure ServiceManagement.
 
 import Foundation
+import MicpegUI
 import ServiceManagement
 
 /// Not a controller any more: a namespace.
@@ -38,9 +39,15 @@ import ServiceManagement
 /// path is not evidence, so the operations now report to stderr, where `log show --predicate
 /// 'process == "MicpegApp"'` can find them even for a copy launched from the Finder.
 enum AgentController {
-    /// The file name inside Contents/Library/LaunchAgents. The label inside that plist stays
-    /// `com.micpeg.agent` on purpose — see docs/app-design.md, "The label stays".
-    static let plistName = "com.micpeg.agent.plist"
+    /// The launchd label — the hand-written LaunchAgent's too, on purpose. See
+    /// docs/app-design.md, "The label stays".
+    static let label = "com.micpeg.agent"
+
+    /// The file name inside Contents/Library/LaunchAgents — and, since `micpeg install` names
+    /// its plist after the label as well, the legacy install's file in ~/Library/LaunchAgents.
+    static let plistName = "\(label).plist"
+
+    static var service: SMAppService { SMAppService.agent(plistName: plistName) }
 
     /// What a migration or repair actually did. The window shows a one-line verdict; this is
     /// the evidence behind it, and the reason it goes to stderr rather than into memory is
@@ -59,6 +66,26 @@ enum AgentController {
     /// where this flow usually dies.
     static func openLoginItems() {
         SMAppService.openSystemSettingsLoginItems()
+    }
+
+    /// `unregister(completionHandler:)`, waited for — the form the header above prescribes
+    /// before registering a changed executable again. The synchronous `unregister()` "will not
+    /// wait for the service to be reaped", so a `register()` straight after it would race.
+    ///
+    /// An error is reported, not treated as failure: kSMErrorJobNotFound means nothing was
+    /// registered to begin with, which is no reason to skip the `register()` that follows.
+    static func unregisterAndWait() -> (line: String, timedOut: Bool) {
+        let done = DispatchSemaphore(value: 0)
+        let failure = Locked<Error?>(nil)
+        service.unregister { error in
+            failure.set(error)
+            done.signal()
+        }
+        let call = "unregister(completionHandler:): "
+        if done.wait(timeout: .now() + 10) == .timedOut {
+            return (call + "TIMED OUT after 10s", true)
+        }
+        return (call + (failure.get().map { describe($0) } ?? "no error"), false)
     }
 
     // MARK: - Reporting

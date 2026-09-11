@@ -74,14 +74,14 @@ public enum ActivityTime {
         return date.formatted(.dateTime.weekday(.wide).month(.abbreviated).day())
     }
 
-    struct Day {
-        let title: String
-        var entries: [Activity]
+    public struct Day {
+        public let title: String
+        public var entries: [Activity]
     }
 
     /// Newest first in, newest day first out. Computed per tick rather than stored, because
     /// "Today" becomes "Yesterday" at midnight without any entry changing.
-    static func days(_ newestFirst: [Activity], now: Date) -> [Day] {
+    public static func days(_ newestFirst: [Activity], now: Date) -> [Day] {
         var days: [Day] = []
         for entry in newestFirst {
             let title = dayTitle(for: entry.at, now: now)
@@ -127,7 +127,8 @@ struct ActivityRow: View {
         // no AXValue at all, so the value was silently dropped and VoiceOver never heard when
         // anything happened. The static-text trait is there to give it a role that reads.
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(model.accessibilitySentence(for: entry)) \(time)")
+        .accessibilityLabel(
+            "\(Copy.accessibilitySentence(for: entry, target: kept.name)) \(time)")
         .accessibilityAddTraits(.isStaticText)
     }
 

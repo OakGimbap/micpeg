@@ -47,9 +47,4 @@ enum RegistrationRecord {
         UserDefaults.standard.set(bundle.path, forKey: pathKey)
         UserDefaults.standard.set(Date(), forKey: dateKey)
     }
-
-    static func clear() {
-        UserDefaults.standard.removeObject(forKey: pathKey)
-        UserDefaults.standard.removeObject(forKey: dateKey)
-    }
 }

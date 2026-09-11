@@ -37,6 +37,19 @@ public func fourCC(_ v: UInt32) -> String {
     return s
 }
 
+/// The inverse of `fourCC`, for reading back what it printed — the Activity window reads the
+/// tags the daemon writes after device names in its log. Kept beside the encoder so the two
+/// cannot drift: `none` is its spelling of 0 and means no code, four printable characters are
+/// the code with spaces kept (`usb `), and anything else is the decimal it fell back to.
+public func fourCCValue<S: StringProtocol>(_ text: S) -> UInt32? {
+    if text == "none" { return nil }
+    let bytes = Array(text.utf8)
+    if bytes.count == 4, bytes.allSatisfy({ $0 >= 32 && $0 < 127 }) {
+        return bytes.reduce(0) { $0 << 8 | UInt32($1) }
+    }
+    return UInt32(text)
+}
+
 public func osStatusText(_ st: OSStatus) -> String {
     "\(st) (\(fourCC(UInt32(bitPattern: st))))"
 }

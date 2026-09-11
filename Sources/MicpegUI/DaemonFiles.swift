@@ -12,6 +12,7 @@
 // rather than a promise.
 
 import Foundation
+import MicpegAudio
 
 /// Where the daemon keeps things. Duplicated from the daemon rather than shared: these are a
 /// read-only mirror of a format the daemon owns, and a shared type would invite the app to
@@ -68,14 +69,14 @@ public struct DaemonState: Equatable, Sendable {
 
     /// The daemon's format, and the reason this is not ISO8601: it is the same string that
     /// goes into the log, so the two can be lined up by eye. `ActivityLog` parses log stamps
-    /// with it.
+    /// with it, and the survey prints its times with it for the same reason.
     ///
     /// `en_US_POSIX` because a fixed format string without it is interpreted in the user's
     /// locale. **The daemon's own formatter (`main.swift`, `stampFormatter`) does not set a
     /// locale**, so on a system configured for a non-Gregorian calendar the two would disagree
     /// and every activity line would silently vanish. Fixing that is a daemon change and the
     /// daemon is finished; recorded here rather than done.
-    static let stamp: DateFormatter = {
+    public static let stamp: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS"
         f.locale = Locale(identifier: "en_US_POSIX")
@@ -116,17 +117,28 @@ public struct PinnedConfig: Equatable, Sendable {
 
     public var enabled: Bool
     public var priority: [Target]
-    public var blockedTransports: [String]
+    /// `blockTransports`, as CoreAudio transport codes. Resolved here, once per read: the first
+    /// draft turned each name into a four-character string per device per redraw to compare
+    /// against another string built the same way — three allocations to answer a question about
+    /// two integers. A name the daemon does not recognise resolves to nothing, as it does there.
+    public var blockedTransportCodes: Set<UInt32>
 
     public init(enabled: Bool, priority: [Target], blockedTransports: [String]) {
         self.enabled = enabled
         self.priority = priority
-        self.blockedTransports = blockedTransports
+        self.blockedTransportCodes = Set(blockedTransports.compactMap(transportCode(_:)))
     }
 
     /// True when there is nothing for the daemon to enforce. This is app-ui.md's
     /// "unconfigured" state, and it is a different thing from "the pinned device is unplugged".
     public var isUnconfigured: Bool { priority.isEmpty }
+
+    /// What to call the chosen microphone: its name, or its UID for an entry written without
+    /// one.
+    public var targetName: String? {
+        guard let first = priority.first else { return nil }
+        return first.name ?? first.uid
+    }
 
     private struct Wire: Decodable {
         struct Input: Decodable { var priority: [Ref] }

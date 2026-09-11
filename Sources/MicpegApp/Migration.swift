@@ -92,27 +92,9 @@ enum Migration {
         }
 
         lines.append("--- unregister, wait for the old process, register ---")
-        // SMAppService.h prescribes this after the executable inside the bundle changes: the
-        // completion handler runs once the old process has been killed, and only then "it is
-        // safe to re-register the service". The synchronous unregister() "will not wait for
-        // the service to be reaped", so two separate calls would race.
-        let svc = service
-        let done = DispatchSemaphore(value: 0)
-        var completionError: Error?
-        svc.unregister { error in
-            completionError = error
-            done.signal()
-        }
-        if done.wait(timeout: .now() + 10) == .timedOut {
-            lines.append("unregister(completionHandler:): TIMED OUT after 10s")
-        } else if let completionError {
-            // kSMErrorJobNotFound here means it was not registered to begin with, which is
-            // not a reason to skip the register below.
-            lines.append("unregister(completionHandler:): \(AgentController.describe(completionError))")
-        } else {
-            lines.append("unregister(completionHandler:): no error")
-        }
-
+        // A timeout or an error is reported and the register below runs regardless: the
+        // survey after it is what decides.
+        lines.append(AgentController.unregisterAndWait().line)
         lines += registerAndConfirm(replacing: before.job.pid)
 
         let after = InstallSurvey.take()
@@ -123,10 +105,6 @@ enum Migration {
 
     // MARK: - Pieces
 
-    private static var service: SMAppService {
-        SMAppService.agent(plistName: AgentController.plistName)
-    }
-
     /// `launchctl bootout`, then remove the plist, then prove both.
     ///
     /// bootout first. Removing the plist while the job is still bootstrapped leaves launchd
@@ -136,8 +114,7 @@ enum Migration {
     private static func tearDownLegacy(_ before: InstallSurvey) -> [String] {
         var lines: [String] = []
 
-        let (status, output) = InstallSurvey.run("/bin/launchctl",
-                                                 ["bootout", InstallSurvey.serviceTarget])
+        let (status, output) = runTool("/bin/launchctl", ["bootout", InstallSurvey.serviceTarget])
         let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
         lines.append("launchctl bootout \(InstallSurvey.serviceTarget) → status \(status)"
                      + (trimmed.isEmpty ? "" : " — \(trimmed)"))
@@ -181,7 +158,7 @@ enum Migration {
         let registeredAt = Date()
 
         do {
-            try service.register()
+            try AgentController.service.register()
             out.append("register(): returned without throwing")
             // Record the path now rather than after the daemon is confirmed: the question
             // this record answers is where the app was when the registration was created,
@@ -191,7 +168,7 @@ enum Migration {
                      + " \(Bundle.main.bundleURL.path)")
         } catch {
             out.append("register(): threw \(AgentController.describe(error))")
-            let status = service.status
+            let status = AgentController.service.status
             out.append("  status is now \(AgentController.describe(status))")
             if status == .requiresApproval {
                 out.append("  The item is switched off in Login Items. Nothing this app can"
@@ -200,7 +177,7 @@ enum Migration {
             return out
         }
 
-        let status = service.status
+        let status = AgentController.service.status
         out.append("status after register(): \(AgentController.describe(status))")
         switch status {
         case .enabled:
@@ -237,7 +214,7 @@ enum Migration {
                 out.append("confirmed after \(waited)s: pid \(pid)"
                          + (previousPID.map { " (was \($0))" } ?? " (nothing was running before)")
                          + " running from \(running.path),"
-                         + " state.json written at \(InstallSurvey.stamp.string(from: updated))")
+                         + " state.json written at \(DaemonState.stamp.string(from: updated))")
                 return out
             }
             Thread.sleep(forTimeInterval: 0.5)
@@ -249,7 +226,7 @@ enum Migration {
                  + (previousPID.map { " (before: \($0))" } ?? ""))
         out.append("  running from:   \(last.job.runningExecutable?.path ?? "unknown")")
         out.append("  expected:       \(mine.path)")
-        out.append("  state.json:     \(last.stateUpdated.map { InstallSurvey.stamp.string(from: $0) } ?? "never written")")
+        out.append("  state.json:     \(last.stateUpdated.map { DaemonState.stamp.string(from: $0) } ?? "never written")")
         out.append("  last exit code: \(last.job.lastExitCode ?? "(none)")")
         out.append("  A job that has already run once in the last 60s sits at \"spawn"
                  + " scheduled\" because of ThrottleInterval, and EX_CONFIG (78) means launchd"
@@ -274,7 +251,7 @@ enum Migration {
     static func linkCLI() -> Outcome {
         var lines: [String] = []
         let daemon = MicpegCLI.bundledExecutable
-        let (status, output) = InstallSurvey.run(daemon.path, ["link", "--force"])
+        let (status, output) = runTool(daemon.path, ["link", "--force"])
         lines.append("\(daemon.path) link --force → status \(status)")
         for line in output.split(separator: "\n") { lines.append("  \(line)") }
 

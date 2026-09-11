@@ -33,21 +33,25 @@
 // below has the shape it has:
 //
 //   - A REVERT's reason names its trigger. `SIGHUP` is the user acting through this app; every
-//     other trigger is Micpeg acting (main.swift:364, :446, :529, :711, :807, :1223).
+//     other trigger is Micpeg acting (the other callers of `applyPin(reason:)` in main.swift).
 //   - The SIGHUP handler resets YIELDED, PAUSED and BACKOFF to ABSENT *without logging it*
-//     (main.swift:1216-1217), so a Resume reads `ABSENT -> PINNED: SIGHUP`, the same line as a
-//     pick. Telling them apart needs the previous transition, which is why the pass below runs
-//     oldest first instead of newest first and stopping early.
+//     (`cmdDaemon()` in main.swift), so a Resume reads `ABSENT -> PINNED: SIGHUP`, the same line
+//     as a pick. Telling them apart needs the previous transition, which is why the pass below
+//     runs oldest first instead of newest first and stopping early.
 //   - A successful revert logs `REVERT -> T (reason)` and then a transition carrying the same
-//     reason text (main.swift:668-669). They are one event, merged on that text. The first
+//     reason text (`revert(to:reason:)`). They are one event, merged on that text. The first
 //     version merged on a two-second window, which is a guess about timing standing in for a
 //     fact the log states outright.
 //
-// The whole file is read. The daemon truncates it to zero past 256 KB (main.swift:811-817), so
-// there is never more than that, and the history on offer is exactly as deep as that allows.
+// The daemon is cited by function here, not by line: one diagnostic commit to main.swift moved
+// every line number this file cited, and nothing noticed.
+//
+// The whole file is read. The daemon truncates it to zero past 256 KB (`truncateLogIfLarge()`),
+// so there is never more than that, and the history on offer is exactly as deep as that allows.
 
 import CoreAudio
 import Foundation
+import MicpegAudio
 
 public struct Activity: Identifiable, Equatable, Sendable {
     /// Who moved the microphone. The row's badge says this before anything is read.
@@ -65,9 +69,9 @@ public struct Activity: Identifiable, Equatable, Sendable {
     /// A microphone as the log names it.
     public struct Device: Equatable, Sendable {
         public var name: String
-        /// From the `[xxxx]` tag the daemon writes after some names (main.swift:576, :626). nil
-        /// where it writes none — `auto-switch to <name>` has no tag — and the window then looks
-        /// the name up among the devices connected now.
+        /// From the `[xxxx]` tag the daemon writes after some names (`user chose`, `displacing`).
+        /// nil where it writes none — `auto-switch to <name>` has no tag — and the window then
+        /// looks the name up among the devices connected now.
         public var transport: UInt32?
 
         public init(name: String, transport: UInt32? = nil) {
@@ -148,8 +152,9 @@ public struct Activity: Identifiable, Equatable, Sendable {
 }
 
 public enum ActivityLog {
-    /// A little over the daemon's 256 KB truncation threshold (main.swift:814), because it checks
-    /// before appending a transition rather than after every line. In practice, the whole file.
+    /// A little over the daemon's 256 KB truncation threshold (`truncateLogIfLarge()`), because
+    /// it checks before appending a transition rather than after every line. In practice, the
+    /// whole file.
     private static let tailBytes = 320 * 1024
 
     /// Newest first, collapsed.
@@ -190,7 +195,7 @@ public enum ActivityLog {
             if let problem = problem(in: line.message) {
                 kind = .problem(problem)
             } else if line.message.hasPrefix("RE-VERIFY -> ") {
-                // The second write of a REVERT already on screen (main.swift:688).
+                // The second write of a REVERT already on screen (its re-verify).
                 kind = nil
             } else if let revert = Revert(line.message) {
                 openRevert = revert.reason
@@ -275,12 +280,12 @@ public enum ActivityLog {
         return nil
     }
 
-    /// `REVERT -> <target> (<reason>)` (main.swift:668). The reason has one of two shapes, and
-    /// both are found by their literal text rather than by the first "(" — a device name can
+    /// `REVERT -> <target> (<reason>)` (`revert(to:reason:)`). The reason has one of two shapes,
+    /// and both are found by their literal text rather than by the first "(" — a device name can
     /// contain one, and the first version cut such names short:
     ///
-    ///     <trigger>, displacing <name> [<fourcc>]     applyPin(reason:), main.swift:624-626
-    ///     <why> to <name>                             evaluate(), main.swift:597-598
+    ///     <trigger>, displacing <name> [<fourcc>]     applyPin(reason:)
+    ///     <why> to <name>                             evaluate()
     ///
     /// The second shape is the one that matters most — macOS switching to a headset and Micpeg
     /// switching back — and it has no "displacing", so the first version reported it without
@@ -377,7 +382,7 @@ public enum ActivityLog {
                     return .reconnected
                 case "yielded device disappeared", "target device re-arrived":
                     // Both are followed in the same call by `applyPin(reason: "dev#")`
-                    // (main.swift:433-446). When that pin reverts, the REVERT row already says
+                    // (`onDeviceList()`). When that pin reverts, the REVERT row already says
                     // what changed; when it does not, this line is the only record that the
                     // kept microphone is in use again.
                     if let next, next.message.hasPrefix("REVERT -> "),
@@ -401,8 +406,8 @@ public enum ActivityLog {
         }
     }
 
-    /// `user chose <name> [<fourcc>] — respecting` (main.swift:576), or `user chose settled
-    /// Bluetooth device <name> — respecting` (:601), which carries no tag but says what it is.
+    /// `user chose <name> [<fourcc>] — respecting`, or `user chose settled Bluetooth device
+    /// <name> — respecting`, which carries no tag but says what it is. Both from `evaluate()`.
     private static func chosenDevice(in reason: String) -> Activity.Device? {
         var text = Substring(reason)
         if text.hasSuffix(" — respecting") { text = text.dropLast(" — respecting".count) }
@@ -417,7 +422,7 @@ public enum ActivityLog {
     }
 
     /// `MacBook Pro Microphone [bltn]` → the name and its transport. The tag is whatever
-    /// `fourCC` printed (CoreAudio.swift:29-37): four characters with spaces kept (`usb `),
+    /// `fourCC` printed, read back by `fourCCValue`: four characters with spaces kept (`usb `),
     /// `none`, or a decimal for a code that is not printable — so it is found from the last
     /// " [" rather than by counting characters.
     private static func device(tagged text: Substring) -> Activity.Device {
@@ -426,16 +431,6 @@ public enum ActivityLog {
         }
         let tag = text[open.upperBound..<text.index(before: text.endIndex)]
         return Activity.Device(name: String(text[..<open.lowerBound]),
-                               transport: transportCode(tag: tag))
-    }
-
-    /// The inverse of `fourCC`.
-    static func transportCode(tag: Substring) -> UInt32? {
-        if tag == "none" { return nil }
-        let bytes = Array(tag.utf8)
-        if bytes.count == 4, bytes.allSatisfy({ $0 >= 32 && $0 < 127 }) {
-            return bytes.reduce(0) { $0 << 8 | UInt32($1) }
-        }
-        return UInt32(tag)
+                               transport: fourCCValue(tag))
     }
 }
