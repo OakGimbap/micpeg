@@ -26,6 +26,12 @@
 import CoreAudio
 import SwiftUI
 
+/// `@MainActor`, like every view in this target. The macOS 15 SDK declares `View` itself
+/// main-actor isolated, so with Xcode 16 and later the mark changes nothing. The macOS 14 SDK
+/// isolates only `body`, and CI's macos-14 runner (Swift 5.10) rejected every computed property
+/// and helper here that reads `AppModel` or `InputTest` — the first time settings-app reached
+/// CI, after the local toolchain had compiled all of it without a warning.
+@MainActor
 public struct MainWindow: View {
     /// The main window's scene. MicpegAppMain.swift declares it as a single `Window` and says
     /// why it is not a `WindowGroup`.
@@ -220,6 +226,7 @@ public struct MainWindow: View {
 
 // MARK: - Pieces
 
+@MainActor
 struct BannerRow: View {
     let banner: AppModel.Banner
     let act: (AppModel.Banner.Action) -> Void
@@ -259,6 +266,7 @@ struct BannerRow: View {
     }
 }
 
+@MainActor
 struct DeviceList: View {
     let model: AppModel
     @Binding var selection: AudioDeviceID?
@@ -293,6 +301,7 @@ struct DeviceList: View {
     }
 }
 
+@MainActor
 struct DevicePicker: View {
     let model: AppModel
     let onChoose: (AudioDevice) -> Void
