@@ -111,6 +111,44 @@ absent "the app creates no files" \
        "createFile" \
        Sources/MicpegApp Sources/MicpegUI
 
+# only_in <label> <allowed> <pattern> <dir>...
+#
+# `absent`, except in the files <allowed> names: an extended regex matched against the whole
+# path.
+only_in() {
+    label=$1
+    allowed=$2
+    pattern=$3
+    shift 3
+    scope=$(scope_of "$@")
+    found=$(code_lines "$pattern" "$@" | grep -v -E -- "^($allowed):")
+    if [ -z "$scope" ]; then
+        echo "skip: $label — no target present yet"
+    elif [ -n "$found" ]; then
+        printf '%s\n' "$found"
+        echo "FAIL: $label —$scope"
+        fail=1
+    else
+        echo "ok:   $label —$scope"
+    fi
+}
+
+# The exceptions to the two checks above, named so that they stay the only ones. The app keeps
+# two things in its own defaults domain, com.micpeg.app, and each has one file: where it
+# registered from (RegistrationRecord.swift, stage 3's proof of a move), and its display
+# language (AppLanguage.swift), as `AppleLanguages`, the key System Settings writes for a
+# per-app language. Neither is a file write, so neither check above can see them. Every other
+# mutation goes through the CLI, and a third file naming UserDefaults, or what writes through
+# it, would be a store nobody decided to have. The first draft excused AppLanguage.swift alone,
+# on the belief that the language was the first value the app stored; it failed on
+# RegistrationRecord.swift the first time it ran.
+stores='Sources/MicpegApp/RegistrationRecord\.swift|Sources/MicpegUI/AppLanguage\.swift'
+for store in UserDefaults AppStorage SceneStorage CFPreferences; do
+    only_in "only RegistrationRecord.swift and AppLanguage.swift name $store" \
+            "$stores" "$store" \
+            Sources/MicpegApp Sources/MicpegUI
+done
+
 # The bundle templates carry two mistakes that assemble and sign without complaint.
 #
 # A `~` in a launchd path is not ignored: launchd keeps it literally, cannot open it, and

@@ -45,6 +45,12 @@ cp "$BIN/micpeg"    "$CONTENTS/MacOS/micpeg"
 cp bundle/Info.plist "$CONTENTS/Info.plist"
 cp bundle/com.micpeg.agent.plist "$CONTENTS/Library/LaunchAgents/com.micpeg.agent.plist"
 
+# What the app reads through Bundle.main: the translations — Sources/MicpegUI/Strings.swift says
+# why they are not a SwiftPM resource — and the LICENSE the Settings window shows, which the MIT
+# terms ask to travel with every copy.
+cp -R bundle/*.lproj "$CONTENTS/Resources/"
+cp LICENSE "$CONTENTS/Resources/LICENSE"
+
 # The collision guard. An earlier draft of docs/app-design.md put the app at
 # Contents/MacOS/Micpeg next to the daemon at Contents/MacOS/micpeg; on a case-insensitive
 # filesystem — the macOS default — those are one file, the second cp wins, and the bundle
@@ -70,6 +76,41 @@ if [ ! -x "$APP/$program" ]; then
     exit 1
 fi
 echo "ok:   BundleProgram '$program' resolves inside the bundle"
+
+# A .strings file that does not parse is dropped whole and without a word, and every string in
+# that language falls back to English. plutil reads it the way the bundle will.
+for table in "$CONTENTS"/Resources/*.lproj/*.strings; do
+    if ! plutil -lint -s "$table"; then
+        echo "error: ${table#$APP/} does not parse" >&2
+        exit 1
+    fi
+done
+
+# Info.plist's CFBundleLocalizations and the .lproj directories say the same thing twice, so
+# check that they agree. The development language has no table: its keys are its strings.
+development=$(plutil -extract CFBundleDevelopmentRegion raw -o - "$CONTENTS/Info.plist")
+declared=()
+i=0
+while language=$(plutil -extract "CFBundleLocalizations.$i" raw -o - "$CONTENTS/Info.plist" 2>/dev/null); do
+    declared+=("$language")
+    i=$((i + 1))
+done
+for language in "${declared[@]}"; do
+    [ "$language" = "$development" ] && continue
+    if [ ! -f "$CONTENTS/Resources/$language.lproj/Localizable.strings" ]; then
+        echo "error: Info.plist declares '$language', and there is no $language.lproj/Localizable.strings" >&2
+        exit 1
+    fi
+done
+for lproj in "$CONTENTS"/Resources/*.lproj; do
+    language=${${lproj:t}:r}
+    if (( ! ${declared[(Ie)$language]} )); then
+        echo "error: ${lproj#$APP/} is not in Info.plist's CFBundleLocalizations" >&2
+        exit 1
+    fi
+done
+tabled=(${declared:#$development})
+echo "ok:   Resources holds LICENSE and a table for each of: ${tabled[*]} (development language, no table: $development)"
 
 # ---------------------------------------------------------------- sign
 

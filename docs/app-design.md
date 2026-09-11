@@ -119,7 +119,7 @@ Sources/MicpegAudio/   # read-only CoreAudio helpers. No writes. Shared.
 Sources/micpeg/        # daemon + CLI. Owns the only setDefaultInputDevice call.
 Sources/MicpegUI/      # SwiftUI views. Library target so Xcode previews work.
 Sources/MicpegApp/     # executable: @main, wiring, migration. Thin.
-bundle/                # Info.plist, the agent plist and the entitlements, for bundle.sh
+bundle/                # Info.plist, the agent plist, the entitlements and ko.lproj, for bundle.sh
 ```
 
 `MicpegAudio` is an extraction of the existing helper block in `main.swift` (`addr`, `fourCC`,
@@ -161,7 +161,15 @@ Micpeg.app/Contents/
   MacOS/micpeg                                 # daemon + CLI, universal
   Library/LaunchAgents/com.micpeg.agent.plist  # where SMAppService looks
   Resources/AppIcon.icns
+  Resources/LICENSE                            # shown in Settings; MIT asks for it in every copy
+  Resources/ko.lproj/Localizable.strings       # the Korean; the English is its keys
+  Resources/ko.lproj/InfoPlist.strings         # the microphone prompt, in Korean
 ```
+
+The resources are found through `Bundle.main`, not SwiftPM's `Bundle.module`, whose generated
+accessor looks for its bundle at the root of the `.app` — beside `Contents/`, where codesign
+refuses it with "unsealed contents present in the bundle root" — and otherwise calls
+`fatalError`.
 
 The app executable is `MicpegApp`, not `Micpeg`, because `MacOS/Micpeg` and `MacOS/micpeg`
 are a single file on a case-insensitive filesystem — the macOS default — and the second copy
@@ -186,6 +194,8 @@ given and has no rename step that could collide. The script asserts afterwards t
 | `LSMinimumSystemVersion` | `14.0` | See *Deployment target* above |
 | `NSMicrophoneUsageDescription` | one sentence naming the input test | Shown in the TCC prompt. Absent ⇒ the app is killed on first capture |
 | `LSUIElement` | **absent** | A Dock icon is wanted |
+| `CFBundleDevelopmentRegion` | `en` | The language `Strings.swift` is written in |
+| `CFBundleLocalizations` | `en`, `ko` | Declares English, which has no `.lproj`, and Korean — which is what lets AppKit's own menus follow the app into Korean. `bundle.sh` checks it against the `.lproj` directories |
 
 The agent plist uses `BundleProgram` — a bundle-relative path — not an absolute `Program`. An
 absolute path breaks when the app is moved or replaced by an update, which is exactly the
@@ -330,6 +340,12 @@ writing it is what would lose someone's pinned device during an upgrade, so the 
 ban on the app writing **any** file rather than a ban on naming that one — it has nothing to
 write, because every mutation goes through the CLI.
 
+The app's own defaults domain, `com.micpeg.app`, holds the only values it stores, two of them,
+each owned by one file: where it registered from (`RegistrationRecord.swift`, stage 3) and its
+display language (`AppLanguage.swift`, as `AppleLanguages` — the key System Settings writes for a
+per-app language, so the two cannot disagree). Neither is the daemon's business, and neither is a
+file the app writes itself. `scripts/invariants.sh` fails if a third file names `UserDefaults`.
+
 Three CLI changes are needed, and no more:
 
 1. **`micpeg pick <uid>`** — pin a named device. The existing no-argument form (pin whatever is
@@ -435,6 +451,10 @@ Confirm each before building on it, and record results in [`verification.md`](ve
 | SwiftUI previews work against a SwiftPM library target in the current Xcode | Open `Package.swift`, add a preview, run it | **partly** (stage 4) — the macro produces the `PreviewRegistry` types Xcode discovers; the canvas cannot be driven from a shell |
 | The app can tell a silent microphone from a quiet room | Measure RMS on both | **only with a measured threshold** (stage 4) — 0.01 called a working microphone silent |
 | Every device with an input scope is a microphone | List devices while an input test is running | **false** (stage 4) — the HAL publishes a transient aggregate device |
+| A `Window` main scene offers no New Window command | Read the menu bar through the accessibility API | **confirmed** (§24) — SwiftUI builds no File menu at all |
+| Closing a `Window` main scene quits the app, as Apple's documentation says | Close the main window with Settings open | **open** — not exercised (§24) |
+| AppKit's own menus follow the app's language | Choose 한국어, reopen, read the menu bar | **confirmed** (§24) |
+| System Settings' per-app language writes the key the Settings window writes | Choose a language for Micpeg in System Settings, then `defaults read com.micpeg.app AppleLanguages` | **open** — the key written here works; what System Settings writes was not observed (§24) |
 
 ## Build order
 

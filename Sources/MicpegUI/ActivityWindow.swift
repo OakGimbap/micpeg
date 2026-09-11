@@ -126,9 +126,13 @@ struct ActivityRow: View {
         // built this way inside a grouped Form is published as AXUnknown, and AXUnknown carries
         // no AXValue at all, so the value was silently dropped and VoiceOver never heard when
         // anything happened. The static-text trait is there to give it a role that reads.
+        //
+        // Verbatim, because the sentence is already translated. Written as a literal this was a
+        // LocalizedStringKey, "%@ %@", looked up in the table and never found — right only by
+        // accident, and the first thing scripts/l10n-check.sh reported.
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(
-            "\(Copy.accessibilitySentence(for: entry, target: kept.name)) \(time)")
+            Text(verbatim: "\(Copy.accessibilitySentence(for: entry, target: kept.name)) \(time)"))
         .accessibilityAddTraits(.isStaticText)
     }
 

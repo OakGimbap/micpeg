@@ -19,10 +19,18 @@ struct MicpegSettingsApp: App {
     init() {
         // Exits the process if an argument was given. See Headless.swift.
         Headless.runIfRequested()
+        // Before any window exists that could change it. AppLanguage.swift says why.
+        _ = AppLanguage.chosenAtLaunch
     }
 
     var body: some Scene {
-        WindowGroup(Copy.appName) {
+        // A `Window`, not a `WindowGroup`: one main window, by construction. A group offers
+        // File ▸ New Micpeg Window (⌘N) and makes as many as it is asked for — verification.md
+        // §22 opened a second one — and `CommandGroup(replacing: .newItem) {}` would only hide
+        // the item and leave the group able to make more. Apple's documentation calls `Window`
+        // "a single, unique window", and says that as the primary scene "the app quits when the
+        // window closes", which AppDelegate below asks for anyway.
+        Window(Copy.appName, id: MainWindow.sceneID) {
             MainWindow(model: model,
                        onBannerAction: handle(_:),
                        onFirstChoice: enableAfterFirstChoice)
@@ -35,7 +43,7 @@ struct MicpegSettingsApp: App {
         }
         .windowResizability(.contentSize)
 
-        // After the WindowGroup, so the group stays the scene that opens at launch. A singleton
+        // After the main window, so that one stays the scene that opens at launch. A singleton
         // `Window` is listed in the Window menu by SwiftUI itself (Apple's `Window`
         // documentation), so there is no CommandGroup for it.
         //
@@ -59,6 +67,12 @@ struct MicpegSettingsApp: App {
         .defaultSize(width: 560, height: 600)
         .windowResizability(.contentMinSize)
         .keyboardShortcut("l", modifiers: [.command, .option])
+
+        // ⌘,. For this scene SwiftUI enables the Settings… item in the app menu (Apple's
+        // `Settings` documentation). SettingsWindow.swift says what is in it, and why one pane.
+        Settings {
+            SettingsWindow(onReopen: reopen)
+        }
     }
 
     // MARK: - Agent ↔ window
@@ -170,12 +184,42 @@ struct MicpegSettingsApp: App {
             model.reloadAll()
         }
     }
+
+    // MARK: - Language
+
+    /// Launches the app again and quits this copy, for a new language. The frameworks choose a
+    /// bundle's language as the process starts (AppLanguage.swift), so nothing short of a new
+    /// process changes the menus, the window titles or the microphone prompt. The daemon is
+    /// launchd's and does not notice.
+    ///
+    /// A new instance, because opening an app that is already running only brings it forward.
+    /// Returns why it failed, for the Settings window to show.
+    @MainActor
+    private func reopen() async -> String? {
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.createsNewApplicationInstance = true
+        do {
+            _ = try await NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL,
+                                                             configuration: configuration)
+        } catch {
+            return error.localizedDescription
+        }
+        NSApp.terminate(nil)
+        return nil
+    }
 }
 
 /// docs/app-design.md, "Process model": quitting the app must never look like it stops the
 /// feature, and there is nothing for the GUI to do once its window is gone. launchd holds the
 /// daemon.
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    /// Tabbing is the other way a Mac app grows windows: View ▸ Show Tab Bar, and Window ▸ Merge
+    /// All Windows, which would fold the main and Activity windows into one frame of two sizes.
+    /// Off before the first window exists, so AppKit never adds either item.
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        NSWindow.allowsAutomaticWindowTabbing = false
+    }
+
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         true
     }

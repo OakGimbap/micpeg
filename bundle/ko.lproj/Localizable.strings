@@ -1,0 +1,131 @@
+/*
+  Korean for every string in Sources/MicpegUI/Strings.swift.
+
+  The key is the English text exactly as String(localized:) spells it there, with %@ for a
+  String and %lld for an Int. A key that does not match is not an error anywhere: it is never
+  found, and the English is shown. scripts/l10n-check.sh compares these keys with the ones the
+  compiler extracts, in both directions.
+
+  Register follows README.ko.md: statements end in 합니다, instructions in 하세요. Terms follow
+  macOS's own Korean: 시스템 설정, 로그인 항목, 개인정보 보호 및 보안, Finder에서 보기. A device
+  name is followed by 을(를), 이(가), 은(는) or (으)로, as macOS writes it, because the last sound of
+  the name is not known. Where a sentence needs its arguments in another order they are
+  numbered: %1$@, %2$@.
+*/
+
+/* Onboarding */
+"When a Bluetooth headset connects, macOS moves your microphone to it." = "블루투스 헤드셋을 연결하면 macOS가 마이크를 그쪽으로 옮깁니다.";
+"Choose the microphone to keep." = "유지할 마이크를 선택하세요.";
+"Don't see it? Connect it and it will appear here." = "목록에 없나요? 연결하면 여기에 나타납니다.";
+"Keep %@" = "%@ 유지";
+"Enabling adds a background helper. macOS will tell you that a login item was added." = "선택하면 백그라운드 도우미가 추가되고, macOS가 로그인 항목이 추가되었다고 알려 줍니다.";
+
+/* Rows */
+"Output" = "출력";
+"Input" = "입력";
+"None" = "없음";
+
+/* Status */
+"%@ stays your microphone." = "마이크가 %@(으)로 유지됩니다.";
+"%@ isn't connected. It will be selected again when it is." = "%@이(가) 연결되어 있지 않습니다. 연결되면 다시 선택됩니다.";
+"You chose %@, so %@ is not being restored. Choosing %@ again resumes it." = "%1$@을(를) 직접 선택했기 때문에 %2$@(으)로 되돌리지 않습니다. %3$@을(를) 다시 선택하면 재개됩니다.";
+"%@ is connected, but another microphone is in use." = "%@이(가) 연결되어 있지만 다른 마이크를 사용 중입니다.";
+"Micpeg is paused. Your microphone can change freely." = "Micpeg이 일시 정지되었습니다. 마이크가 자유롭게 바뀔 수 있습니다.";
+"No microphone is chosen yet." = "아직 선택한 마이크가 없습니다.";
+"Micpeg is still using the settings it loaded last." = "Micpeg은 마지막으로 불러온 설정을 계속 사용하고 있습니다.";
+
+/* Banners */
+"Another program keeps changing your microphone" = "다른 프로그램이 계속 마이크를 바꾸고 있습니다";
+"Micpeg stopped competing with it. Quit the other program, or pause Micpeg." = "Micpeg은 그 프로그램과의 경쟁을 멈췄습니다. 다른 프로그램을 종료하거나 Micpeg을 일시 정지하세요.";
+"Micpeg is switched off in Login Items" = "로그인 항목에서 Micpeg이 꺼져 있습니다";
+"Its background helper can't run until you turn it back on. Only you can do that." = "다시 켤 때까지 백그라운드 도우미가 실행되지 않습니다. 이것은 사용자만 할 수 있습니다.";
+"Open Login Items" = "로그인 항목 열기";
+"The background helper isn't running" = "백그라운드 도우미가 실행되고 있지 않습니다";
+"Your microphone isn't being kept. Reconnecting usually fixes it." = "마이크가 유지되지 않고 있습니다. 대개 다시 연결하면 해결됩니다.";
+"Reconnect" = "다시 연결";
+"An older installation is still set up" = "이전 설치가 아직 남아 있습니다";
+"It was installed from the command line and needs to be replaced before this app can take over." = "명령줄에서 설치된 것으로, 이 앱이 이어받으려면 먼저 교체해야 합니다.";
+"Replace It" = "교체";
+"Another copy of Micpeg is doing this" = "다른 Micpeg 사본이 이 일을 하고 있습니다";
+"The copy at %@ set up the background helper and it's running. Use that one, or delete it and reopen this one." = "%@에 있는 사본이 백그라운드 도우미를 설정했고, 실행 중입니다. 그 사본을 사용하거나, 그것을 삭제하고 이 앱을 다시 여세요.";
+"Micpeg was moved from %@. Its background helper has been reconnected." = "Micpeg이 %@에서 옮겨졌습니다. 백그라운드 도우미를 다시 연결했습니다.";
+"Micpeg reconnected after being moved" = "옮겨진 Micpeg을 다시 연결했습니다";
+"%@ connects over Bluetooth, which Micpeg is set to ignore. Keeping it would leave nothing to do." = "%@은(는) 블루투스로 연결되는데, Micpeg은 블루투스 장치를 무시하도록 설정되어 있습니다. 이 마이크를 유지하면 Micpeg이 할 일이 없습니다.";
+"Your microphone couldn't be switched back" = "마이크를 되돌리지 못했습니다";
+"Micpeg tried to select %@, and macOS didn't accept the change." = "Micpeg이 %@을(를) 선택하려 했지만 macOS가 변경을 받아들이지 않았습니다.";
+"Show Activity" = "활동 보기";
+"Micpeg's settings file can't be read" = "Micpeg 설정 파일을 읽을 수 없습니다";
+"The background helper is still using the settings it loaded last. Fix or remove the file to change them." = "백그라운드 도우미는 마지막으로 불러온 설정을 계속 사용합니다. 설정을 바꾸려면 파일을 고치거나 삭제하세요.";
+
+/* Actions */
+"Change Microphone" = "마이크 변경";
+"Pause" = "일시 정지";
+"Resume" = "재개";
+"Done" = "완료";
+"Cancel" = "취소";
+
+/* Input test */
+"Start Test" = "테스트 시작";
+"Stop Test" = "테스트 중단";
+"Speak, and the level should move." = "말해 보세요. 레벨이 움직여야 합니다.";
+"No sound is reaching this microphone." = "이 마이크로 소리가 들어오지 않습니다.";
+"Check its mute switch and the input volume in System Settings." = "마이크의 음소거 스위치와 시스템 설정의 입력 음량을 확인하세요.";
+"If the lid is closed, the built-in microphone isn't available. Otherwise check the input volume in System Settings." = "덮개가 닫혀 있으면 내장 마이크를 쓸 수 없습니다. 그렇지 않다면 시스템 설정에서 입력 음량을 확인하세요.";
+
+/* Activity */
+"Activity" = "활동";
+"Nothing Yet" = "아직 없음";
+"When your microphone changes, it appears here." = "마이크가 바뀌면 여기에 나타납니다.";
+"Today" = "오늘";
+"Yesterday" = "어제";
+"Just now" = "방금";
+"%lld min ago" = "%lld분 전";
+"%lld times" = "%lld회";
+"Paused" = "일시 정지됨";
+"Resumed" = "재개됨";
+"Started" = "시작됨";
+"Reconnected" = "다시 연결됨";
+"Back in use" = "다시 사용 중";
+"Disconnected" = "연결 끊김";
+"Stopped competing" = "경쟁 중단";
+"Couldn't switch back" = "되돌리지 못함";
+"Lost the audio system" = "오디오 시스템 놓침";
+"Status not saved" = "상태 저장 안 됨";
+"Settings unreadable" = "설정을 읽을 수 없음";
+"Moved your microphone back to %@ from %@." = "마이크를 %2$@에서 %1$@(으)로 되돌렸습니다.";
+"Moved your microphone back to %@." = "마이크를 %@(으)로 되돌렸습니다.";
+"You chose %@ in Micpeg." = "Micpeg에서 %@을(를) 선택했습니다.";
+"You switched to %@, so Micpeg stepped aside." = "%@(으)로 직접 바꿨기 때문에 Micpeg이 물러났습니다.";
+"You switched back to %@." = "%@(으)로 다시 바꿨습니다.";
+"You paused Micpeg." = "Micpeg을 일시 정지했습니다.";
+"You resumed Micpeg, and %@ is your microphone again." = "Micpeg을 재개했고, 마이크가 다시 %@(으)로 돌아왔습니다.";
+"Micpeg started." = "Micpeg이 시작되었습니다.";
+"%@ is connected again." = "%@이(가) 다시 연결되었습니다.";
+"The microphone you switched to went away, so %@ is back in use." = "직접 바꾼 마이크가 사라져서 %@을(를) 다시 사용합니다.";
+"%@ isn't connected." = "%@이(가) 연결되어 있지 않습니다.";
+"Stopped competing with another program over the microphone." = "마이크를 두고 다른 프로그램과 경쟁하는 것을 멈췄습니다.";
+"Tried to switch your microphone back and couldn't." = "마이크를 되돌리려 했지만 하지 못했습니다.";
+"Lost track of the audio system and restarted." = "오디오 시스템을 놓쳐서 다시 시작했습니다.";
+"Couldn't save its status, so what's shown here may be out of date." = "상태를 저장하지 못해서 여기 보이는 내용이 최신이 아닐 수 있습니다.";
+"Couldn't read its settings and is using the last ones that worked." = "설정을 읽지 못해서 마지막으로 작동한 설정을 사용하고 있습니다.";
+
+/* Failures the window has to surface */
+"Micpeg needs permission to use the microphone. Allow it in System Settings > Privacy & Security > Microphone." = "Micpeg이 마이크를 쓰려면 권한이 필요합니다. 시스템 설정 > 개인정보 보호 및 보안 > 마이크에서 허용하세요.";
+"This microphone isn't providing any audio channels right now." = "이 마이크는 지금 오디오 채널을 제공하지 않습니다.";
+"The microphone could not be opened: %@" = "마이크를 열 수 없습니다: %@";
+"That device has no identifier to pin." = "그 장치에는 고정할 식별자가 없습니다.";
+
+/* Settings */
+"Language" = "언어";
+"System Language" = "시스템 언어";
+"Takes effect when Micpeg reopens." = "Micpeg을 다시 열면 적용됩니다.";
+"Reopen Now" = "지금 다시 열기";
+"Micpeg couldn't reopen: %@" = "Micpeg을 다시 열지 못했습니다: %@";
+"Log File" = "로그 파일";
+"Show in Finder" = "Finder에서 보기";
+"Activity shows what happened to your microphone. The log file is the background helper's full record." = "활동에는 마이크에 일어난 일이 표시됩니다. 로그 파일은 백그라운드 도우미의 전체 기록입니다.";
+"Version" = "버전";
+"License" = "라이선스";
+"View" = "보기";
+"Source Code" = "소스 코드";
+"Micpeg uses no third-party code, so there are no other licenses to list." = "Micpeg은 서드파티 코드를 쓰지 않으므로 표시할 다른 라이선스가 없습니다.";

@@ -65,9 +65,18 @@ script prints the directories each check actually searched, because the first dr
 grepped a path that did not exist and reported a pass — the same shape of lie as an idle
 daemon with dead listeners.
 
+It also holds `UserDefaults` to the two files that own the app's only stored values —
+`RegistrationRecord.swift` and `AppLanguage.swift`. And `scripts/l10n-check.sh`, also run by
+CI, fails when a string the compiler sees as localizable has no Korean entry, or when the daemon
+localizes anything: it runs from `Contents/MacOS`, so its `Bundle.main` is the app, and a
+translated log line is one `ActivityLog` cannot parse.
+
 ## Code style
 
-- English identifiers, English comments, English UI strings.
+- English identifiers, English comments, English UI strings — with a Korean table beside them,
+  `bundle/ko.lproj`. Every user-facing string goes through `Copy` in `Strings.swift`, and text
+  that is already translated goes into `Text(verbatim:)`, because a literal is a lookup key. See
+  [`docs/app-ui.md`](docs/app-ui.md), Language.
 - Comments explain *why*, and cite evidence — a header line number, a measured interval, the
   test that failed. The existing comments are the model: they name the incident that produced
   the code.
@@ -99,12 +108,14 @@ Targets marked `(planned)` do not exist yet — see the build order at the end o
 ```
 Sources/MicpegAudio/       # read-only CoreAudio helpers, shared. No writes.
 Sources/micpeg/main.swift  # daemon + CLI. Owns the only setDefaultInputDevice call.
-Sources/MicpegUI/          # the windows: views, models, file/device watching, the level meter.
+Sources/MicpegUI/          # the windows (main, Activity, Settings), models, file/device
+                           #   watching, the level meter, the strings and the language.
                            #   a library target, so #Preview registers with Xcode's canvas
 Sources/MicpegApp/         # @main, survey, migration, registration record. Thin.
-bundle/                    # Info.plist, agent plist, entitlements — inputs to bundle.sh
+bundle/                    # Info.plist, agent plist, entitlements, ko.lproj — inputs to bundle.sh
 scripts/install.sh         # source build + install, for developers
 scripts/invariants.sh      # the structural greps above; CI runs it
+scripts/l10n-check.sh      # every localizable string has a Korean entry; CI runs it
 scripts/bundle.sh          # assemble Micpeg.app, sign, check. Notarization is stage 5
 scripts/leakcheck.sh       # 24h soak test (writes a gitignored result file)
 docs/design.md             # daemon architecture + the three CoreAudio traps
@@ -116,7 +127,8 @@ docs/ko/engineering-log.md # original Korean development log
 
 Runtime files, all outside the repo:
 `~/.config/micpeg/{config,state}.json`, `~/Library/Logs/micpeg.log`,
-and the agent registered from `Micpeg.app/Contents/Library/LaunchAgents/`.
+the agent registered from `Micpeg.app/Contents/Library/LaunchAgents/`, and the app's defaults
+domain `com.micpeg.app` — where it registered from, and `AppleLanguages` if a language was chosen.
 
 ## Development workflow
 
@@ -124,6 +136,8 @@ and the agent registered from `Micpeg.app/Contents/Library/LaunchAgents/`.
 swift build -c release                              # host arch
 swift build -c release --arch arm64 --arch x86_64   # universal
 ./scripts/bundle.sh                                 # assemble + sign Micpeg.app
+./scripts/l10n-check.sh                             # every localizable string has Korean
+defaults read com.micpeg.app AppleLanguages         # the language chosen in Settings, if any
 
 micpeg status
 tail -f ~/Library/Logs/micpeg.log
