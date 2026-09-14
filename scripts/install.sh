@@ -20,7 +20,11 @@ if launchctl print "gui/$(id -u)/com.micpeg.agent" 2>/dev/null \
   exit 1
 fi
 
-ARGS=(-c release)
+# --product micpeg: a bare `swift build` also builds MicpegUI and MicpegApp, which ties
+# installing the finished agent to the settings app compiling. settings-app has already failed
+# to compile on the macOS 14 SDK this project advertises as its floor (CLAUDE.md, CI notes),
+# so without this the minimum supported configuration cannot install the finished program.
+ARGS=(-c release --product micpeg)
 [ -n "$MICPEG_UNIVERSAL" ] && ARGS+=(--arch arm64 --arch x86_64)
 
 swift build "${ARGS[@]}"

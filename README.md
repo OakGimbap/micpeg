@@ -32,9 +32,10 @@ when macOS hands it to a Bluetooth device.
   audio output, as they should.
 - **Respects your choices.** Pick a different microphone yourself and micpeg yields. It only
   reverses transitions it can attribute to the system.
-- **Effectively free.** 0 idle wakeups, ~4 MB `phys_footprint`, 0.59 s of CPU across 24 hours
-  of real use. It parks on `CFRunLoopRun()` with no timers and no polling — it does nothing at
-  all until CoreAudio sends a notification. See [docs/verification.md](docs/verification.md).
+- **Effectively free.** 3 idle wakeups, ~4 MB `phys_footprint` and 0.59 s of CPU across 24
+  hours of real use. It parks on `CFRunLoopRun()` with no polling and no repeating timers — it
+  does nothing at all until CoreAudio sends a notification. See
+  [docs/verification.md](docs/verification.md).
 - **The agent never opens the microphone.** It sets a routing preference; it does not capture.
   No orange recording indicator, no TCC prompt, no interference with whatever app currently
   holds the mic. The settings app opens it only while you run its input test, and asks for
@@ -176,11 +177,17 @@ Full rationale, including three design defects found and fixed before shipping:
   transitions), so this is a heuristic. Pick it again a moment later, or run `micpeg off`.
 - The same applies for ~15 s after login or a `coreaudiod` restart.
 - The install prefix is fixed at `~/.local/bin`.
-- One unexplained incident: on 2026-09-10 the agent reported `PINNED` while the default input
-  actually sat on a Bluetooth headset for ~1.5 h with no log output. Sleep, `coreaudiod`
-  restart, process restart, queue deadlock and a dead listener were all ruled out; a dropped
-  notification is the remaining hypothesis. Three silently-give-up paths were hardened as
-  insurance. `micpeg status` detects it and `micpeg on` fixes it instantly.
+- **Two unexplained incidents, one of which `micpeg status` does not reveal.** On 2026-09-10
+  the agent reported `PINNED` while the default input actually sat on a Bluetooth headset for
+  ~1.5 h with no log output. On 2026-09-11 the same shape recurred for 42 minutes and ended with
+  the daemon classifying that headset as a settled device and yielding to it. Both followed one
+  of the daemon's own writes away from the headset. Sleep, `coreaudiod` restart, process
+  restart, queue deadlock and a dead listener were all ruled out; a dropped notification and a
+  judgement made against a stale value are the two remaining explanations, and five reproduction
+  attempts failed. Three silently-give-up paths were hardened as insurance. In the first shape
+  `micpeg status` shows a `state:` and a `default input:` that disagree. In the second it
+  reports `YIELDED` and looks correct — protection is simply off until you disconnect the
+  headset. `micpeg on` restores it instantly in both cases.
 
 ## Uninstall
 
