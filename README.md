@@ -115,10 +115,11 @@ upgrade actually takes effect.
 |---|---|
 | `micpeg status` | Current state, pinned target, live default input, daemon liveness |
 | `micpeg list` | Every input device with its transport type and UID |
-| `micpeg pick` | Make the current default input the pinned target, replacing the previous one |
+| `micpeg pick [uid]` | Make the current default input the pinned target, replacing the previous one. Given a `uid`, pin that device instead — it must be connected and publish an input scope |
 | `micpeg on` / `off` | Resume / pause pinning (also clears a yield) |
+| `micpeg link` | Symlink `~/.local/bin/micpeg` to the running binary, putting it on your PATH. `--force` replaces a real file already sitting there — that file is the standalone CLI install |
 | `micpeg install` | Write config + LaunchAgent and bootstrap the agent |
-| `micpeg uninstall` | Bootout the agent and remove its LaunchAgent |
+| `micpeg uninstall` | Bootout the agent and remove its LaunchAgent and its state file |
 | `micpeg daemon` | Run in the foreground (used by launchd) |
 
 To change which mic is pinned: select it in System Settings, then run `micpeg pick`.
@@ -195,6 +196,14 @@ Full rationale, including three design defects found and fixed before shipping:
 micpeg uninstall
 rm -rf ~/.config/micpeg ~/Library/Logs/micpeg.log ~/.local/bin/micpeg
 ```
+
+## Contributing
+
+Bug reports and focused pull requests are welcome. A few of this project's rules are enforced by
+CI rather than by review — read [CONTRIBUTING.md](CONTRIBUTING.md) first, it is short.
+
+When reporting a problem, paste `micpeg status`, not `micpeg list`: a UID embeds a USB serial
+number or a Bluetooth MAC address, and an issue is public.
 
 ## License
 

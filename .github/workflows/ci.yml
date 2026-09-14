@@ -11,8 +11,42 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      # CLAUDE.md's code-style rule — mark every SwiftUI view @MainActor — exists because the
+      # macOS 14 SDK isolates only a view's `body` to the main actor, so CI catches isolation
+      # errors a current local toolchain accepts without a warning. That only holds while CI
+      # really does build against the macOS 14 SDK, and the runner image's default Xcode drifts.
+      # Select by SDK rather than by Xcode version, so an image refresh that drops one point
+      # release fails over instead of silently moving CI onto a newer SDK.
+      - name: Pin Xcode to the macOS 14 SDK
+        run: |
+          pick=""
+          for app in /Applications/Xcode_15.3.app /Applications/Xcode*.app; do
+            [ -d "$app" ] || continue
+            sdk="$(DEVELOPER_DIR="$app/Contents/Developer" xcrun --sdk macosx --show-sdk-version 2>/dev/null || true)"
+            case "$sdk" in
+              14.*) pick="$app"; echo "selected $app (macOS SDK $sdk)"; break ;;
+            esac
+          done
+          if [ -z "$pick" ]; then
+            echo "::error::no installed Xcode ships the macOS 14 SDK any more. CI is the only"
+            echo "::error::place that SDK is exercised — pick a replacement and update CLAUDE.md."
+            ls -d /Applications/Xcode*.app
+            exit 1
+          fi
+          sudo xcode-select -s "$pick"
+
+      # Printing a toolchain is not the same as having one. Assert the SDK, because that is what
+      # the isolation rule above actually depends on.
       - name: Show toolchain
-        run: swift --version
+        run: |
+          swift --version
+          xcodebuild -version
+          SDK="$(xcrun --sdk macosx --show-sdk-version)"
+          echo "macOS SDK: $SDK"
+          case "$SDK" in
+            14.*) ;;
+            *) echo "::error::expected the macOS 14 SDK, got $SDK"; exit 1 ;;
+          esac
 
       - name: Build (release)
         run: swift build -c release
@@ -36,12 +70,7 @@ jobs:
       - name: Translations complete
         run: ./scripts/l10n-check.sh
 
-      # The repo must never carry device identifiers. This is the enforcement.
+      # The repo must never carry device identifiers. A script rather than an inline grep, so a
+      # contributor can run the same check before pushing — see CONTRIBUTING.md.
       - name: No device identifiers committed
-        run: |
-          if git grep -nIE '[0-9A-F]{2}(-[0-9A-F]{2}){5}:(input|output)' -- . ; then
-            echo "::error::a Bluetooth MAC-based device UID is committed"; exit 1
-          fi
-          if git ls-files | grep -q 'leakcheck-result'; then
-            echo "::error::soak-test output is committed; it contains local device names"; exit 1
-          fi
+        run: ./scripts/id-check.sh

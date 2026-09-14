@@ -109,10 +109,11 @@ git pull
 |---|---|
 | `micpeg status` | 현재 상태, 고정 대상, 실제 기본 입력, 데몬 생존 여부 |
 | `micpeg list` | 입력 장치 전체를 transport type·UID와 함께 나열 |
-| `micpeg pick` | 현재 기본 입력을 고정 대상으로 지정 (이전 대상은 대체됨) |
+| `micpeg pick [uid]` | 현재 기본 입력을 고정 대상으로 지정 (이전 대상은 대체됨). `uid`를 주면 그 장치를 대신 고정하며, 연결돼 있고 입력 스코프를 가진 장치여야 합니다 |
 | `micpeg on` / `off` | 고정 재개 / 일시 중지 (yield도 함께 해제) |
+| `micpeg link` | `~/.local/bin/micpeg`를 실행 중인 바이너리로 심볼릭 링크해 PATH에 올립니다. 그 자리에 실제 파일이 있으면 `--force`로 교체합니다 — 그 파일은 독립 CLI 설치본입니다 |
 | `micpeg install` | 설정 + LaunchAgent 작성 후 에이전트 부트스트랩 |
-| `micpeg uninstall` | 에이전트 bootout + LaunchAgent 제거 |
+| `micpeg uninstall` | 에이전트 bootout + LaunchAgent와 상태 파일 제거 |
 | `micpeg daemon` | 포그라운드 실행 (launchd 전용) |
 
 고정 대상을 바꾸려면 시스템 설정에서 그 마이크를 고른 뒤 `micpeg pick`을 실행하세요.
@@ -186,6 +187,14 @@ Wave Link *가상* 장치를 기본 입력으로 지정하라고 안내하고, C
 micpeg uninstall
 rm -rf ~/.config/micpeg ~/Library/Logs/micpeg.log ~/.local/bin/micpeg
 ```
+
+## 기여
+
+버그 제보와 범위가 분명한 PR을 환영합니다. 이 프로젝트의 규칙 몇 가지는 리뷰가 아니라 CI가
+강제하므로 [CONTRIBUTING.md](CONTRIBUTING.md)(영문)를 먼저 읽어 주세요. 짧습니다.
+
+문제를 제보할 때는 `micpeg list`가 아니라 `micpeg status`를 붙여 주세요. UID에는 USB 시리얼
+번호나 블루투스 MAC 주소가 들어 있고, 이슈는 공개됩니다.
 
 ## 라이선스
 

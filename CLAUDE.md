@@ -28,11 +28,15 @@ touching the app.
   claimed "macOS 12 (Monterey) or later" long after that stopped being true; they now say
   macOS 14 and Swift 5.9, and say where the floor comes from. See `docs/app-design.md`.
 - Verified on real hardware only on macOS 26.
-- CI (`.github/workflows/ci.yml`, `macos-14`) builds with Xcode 15.3 — Swift 5.10 and the
-  macOS 14 SDK — which is older than the local toolchain and stricter where SwiftUI's isolation
-  changed: the macOS 14 SDK isolates only a view's `body` to the main actor. The first time
-  `settings-app` reached CI, it failed to compile code the local toolchain had accepted without
-  a warning. **A green local build is not a green CI build.**
+- CI (`.github/workflows/ci.yml`, `macos-14`) builds against the **macOS 14 SDK**, which is
+  older than the local toolchain and stricter where SwiftUI's isolation changed: the macOS 14
+  SDK isolates only a view's `body` to the main actor. The first time `settings-app` reached
+  CI, it failed to compile code the local toolchain had accepted without a warning.
+  **A green local build is not a green CI build.**
+  This used to be a claim about Xcode 15.3 that the workflow did not actually pin, so a runner
+  image refresh could have retired it silently. The workflow now selects an Xcode *by its SDK
+  version* (preferring 15.3), asserts the result, and fails with instructions if no installed
+  Xcode ships the macOS 14 SDK any more.
 
 ## Architecture principles
 
@@ -57,7 +61,7 @@ checks all three plus the write count, and CI runs it:
 ```sh
 grep -rc AudioObjectSetPropertyData Sources/MicpegApp Sources/MicpegUI Sources/MicpegAudio  # 0
 grep -rc DefaultOutputDevice        Sources/micpeg Sources/MicpegAudio                      # 0
-grep -rc AVFoundation               Sources/micpeg Sources/MicpegAudio                      # 0
+grep -rc AVF                        Sources/micpeg Sources/MicpegAudio                      # 0
 grep -rc AudioObjectSetPropertyData Sources                                                 # 1
 ```
 
@@ -100,7 +104,7 @@ translated log line is one `ActivityLog` cannot parse.
 - The judgement logic in `evaluate()` has been validated across many rounds of real-hardware
   testing. Do not refactor it for tidiness — the daemon runs a handful of times per day with
   0 idle wakeups, so there is no performance argument, and the risk is real.
-- Splitting the 1,234-line `main.swift` is still a separate, test-backed task. Extracting the
+- Splitting the 1,438-line `main.swift` is still a separate, test-backed task. Extracting the
   read-only CoreAudio helpers into `MicpegAudio` is *not* that task and does not authorize it.
 - The tuning values (`arrivalWindowSeconds`, `debounceMs`, `reverifyDelaySeconds`,
   `postWriteGraceSeconds`, `blockTransports`) came from hardware measurement and must not be
@@ -112,7 +116,7 @@ translated log line is one `ActivityLog` cannot parse.
 
 ## File structure
 
-Targets marked `(planned)` do not exist yet — see the build order at the end of
+Every target below exists. The build order that produced them is at the end of
 [`docs/app-design.md`](docs/app-design.md).
 
 ```
@@ -126,6 +130,7 @@ bundle/                    # Info.plist, agent plist, entitlements, ko.lproj —
 scripts/install.sh         # source build + install, for developers
 scripts/invariants.sh      # the structural greps above; CI runs it
 scripts/l10n-check.sh      # every localizable string has a Korean entry; CI runs it
+scripts/id-check.sh        # no device identifier is committed; CI runs it
 scripts/bundle.sh          # assemble Micpeg.app, sign, check. Notarization is stage 5
 scripts/leakcheck.sh       # 24h soak test (writes a gitignored result file)
 docs/design.md             # daemon architecture + the three CoreAudio traps
@@ -133,6 +138,9 @@ docs/app-design.md         # app architecture, bundle, SMAppService, invariants
 docs/app-ui.md             # app interface spec and Apple conventions
 docs/verification.md       # measured numbers, test matrix, open issues
 docs/ko/engineering-log.md # original Korean development log
+CONTRIBUTING.md            # the rules CI enforces, for humans. CLAUDE.md is the long version
+.github/workflows/ci.yml   # pins Xcode by SDK, builds, runs the three check scripts
+.github/ISSUE_TEMPLATE/    # bug report; asks for status + log lines, warns off `micpeg list`
 ```
 
 Runtime files, all outside the repo:
@@ -146,7 +154,9 @@ domain `com.micpeg.app` — where it registered from, and `AppleLanguages` if a 
 swift build -c release                              # host arch
 swift build -c release --arch arm64 --arch x86_64   # universal
 ./scripts/bundle.sh                                 # assemble + sign Micpeg.app
+./scripts/invariants.sh                             # the structural greps above
 ./scripts/l10n-check.sh                             # every localizable string has Korean
+./scripts/id-check.sh                               # no device identifier is committed
 defaults read com.micpeg.app AppleLanguages         # the language chosen in Settings, if any
 
 micpeg status

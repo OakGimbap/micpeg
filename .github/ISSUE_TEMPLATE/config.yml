@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Known limitations
+    url: https://github.com/OakGimbap/micpeg#known-limitations
+    about: The ~15 s heuristic window, the fixed install prefix and the two unexplained incidents are already documented.

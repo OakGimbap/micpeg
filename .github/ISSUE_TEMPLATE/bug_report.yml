@@ -1,0 +1,81 @@
+name: Bug report
+description: micpeg did something wrong, or stopped doing its job
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ### Please do not paste `micpeg list` output
+
+        A device UID embeds a USB serial number or a Bluetooth MAC address. This repository's
+        CI refuses any commit that contains one, and an issue is just as public.
+
+        `micpeg status` prints device **names** only and is safe to paste. If you need to name a
+        device, its name is enough.
+
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version
+      description: "`sw_vers -productVersion`"
+      placeholder: "26.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install
+    attributes:
+      label: How is micpeg installed?
+      options:
+        - scripts/install.sh (command line only)
+        - Micpeg.app
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what you expected instead
+    validations:
+      required: true
+
+  - type: textarea
+    id: status
+    attributes:
+      label: "`micpeg status` output"
+      description: >
+        Run it while the problem is happening if you can — it is a fresh process and names the
+        device actually in use. Device names only; safe to paste.
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: log
+    attributes:
+      label: Log lines from around the time it happened
+      description: |
+        `~/Library/Logs/micpeg.log`. The daemon writes one line per event and nothing at idle,
+        so a few minutes either side is usually the whole story.
+
+        Three lines carry most of the information: `EVENT dIn` (a default-input change reached
+        the daemon), the `JUDGED` line that follows it (what it decided and why), and `REVERT`
+        (it wrote). If the input moved and there is **no** `EVENT dIn` for it, say so — that
+        absence is itself the evidence. If there are no relevant lines at all, write "none".
+      render: text
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: known
+    attributes:
+      label: Does this match the open issue described in the README?
+      description: >
+        Two incidents are on record and not yet explained. Ticking this is a strong signal and
+        the log lines above are exactly what is needed to settle it — see
+        docs/verification.md, "Second occurrence".
+      options:
+        - label: >
+            The default input sat on a Bluetooth device while `micpeg status` said `PINNED`,
+            or micpeg reported `YIELDED` to a device I never chose.
+          required: false
