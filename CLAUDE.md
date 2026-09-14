@@ -7,9 +7,16 @@ automatic switch macOS performs when a Bluetooth headset connects.
 
 Two faces, two processes:
 
-- **`micpeg`** — a launchd agent (and the CLI). This is the program. It is finished.
-- **`Micpeg.app`** — a SwiftUI settings app used to pick a microphone and confirm the agent is
-  working. Opened perhaps three times in its life. Under construction.
+- **`Micpeg.app`** — the product. A notarized DMG on GitHub Releases, with a Homebrew Cask
+  pointing at it. It is what users download, it is the only supported way to install the agent,
+  and it is where a microphone is chosen, the installation is confirmed and the whole thing is
+  removed. Opened perhaps three times in its life, and each of those three times matters.
+- **`micpeg`** — the launchd agent, and the CLI inside the bundle that the app shells out to for
+  every write. **It is finished.** Not a user-facing product: it is documented in
+  [`docs/cli.md`](docs/cli.md), it appears nowhere in the app's interface, and `scripts/install.sh`
+  installs it standalone for developers only.
+
+The release pipeline — the tag rule, the scripts, the secrets — is at the end of this file.
 
 Read [`docs/design.md`](docs/design.md) before changing anything in the judgement path. It
 records three CoreAudio traps that each cost a full round of real-hardware testing to find.
@@ -54,6 +61,15 @@ touching the app.
 6. **The app writes nothing to CoreAudio.** It reads devices and registers listeners; every
    mutation goes through the `micpeg` CLI. This is what keeps principle 1 provable now that the
    app has to read the default output in order to display it.
+
+7. **Nothing shipped opens a network connection.** No update check, no analytics. The trust
+   argument the README makes about the microphone is worth nothing from a process that also talks
+   to a server, and a version number is not worth an outbound connection from a process holding a
+   microphone grant. Only `SettingsWindow.swift` and `SystemSettings.swift` may build a `URL` from
+   a string, and both hand it to `NSWorkspace`.
+8. **The app may delete files in exactly two places.** `Migration.swift` (the legacy plist) and
+   `Uninstall.swift` (a removal). Dragging the app to the Trash does not clear the Background Task
+   Management record — measured, §3 and §28 — so removal has to be something the app does.
 
 Principles 1 and 6 are enforced structurally, not by discipline. `scripts/invariants.sh`
 checks all three plus the write count, and CI runs it:
@@ -125,21 +141,31 @@ Sources/micpeg/main.swift  # daemon + CLI. Owns the only setDefaultInputDevice c
 Sources/MicpegUI/          # the windows (main, Activity, Settings), models, file/device
                            #   watching, the level meter, the strings and the language.
                            #   a library target, so #Preview registers with Xcode's canvas
-Sources/MicpegApp/         # @main, survey, migration, registration record. Thin.
+Sources/MicpegApp/         # @main, survey, migration, registration record, install-location
+                           #   guard, removal. Thin.
 bundle/                    # Info.plist, agent plist, entitlements, ko.lproj — inputs to bundle.sh
-scripts/install.sh         # source build + install, for developers
+scripts/install.sh         # source build + install of the standalone CLI, for developers
+scripts/pin-xcode.sh       # select the Xcode with the macOS 14 SDK; both workflows use it
+scripts/version.sh         # read/assert the version in bundle/Info.plist. The only store
+scripts/make-icon.swift    # draw bundle/AppIcon.iconset. CGPaths only, no SF Symbols
+scripts/signing-identity.sh # the one Developer ID Application cert, or fail saying why
 scripts/invariants.sh      # the structural greps above; CI runs it
 scripts/l10n-check.sh      # every localizable string has a Korean entry; CI runs it
 scripts/id-check.sh        # no device identifier is committed; CI runs it
-scripts/bundle.sh          # assemble Micpeg.app, sign, check. Notarization is stage 5
+scripts/bundle.sh          # assemble Micpeg.app, sign, check. MICPEG_RELEASE / MICPEG_ADHOC
+scripts/notarize.sh        # submit to Apple, wait, staple. Both the .app and the .dmg
+scripts/dmg.sh             # package the stapled app, sign, then mount it and check
 scripts/leakcheck.sh       # 24h soak test (writes a gitignored result file)
 docs/design.md             # daemon architecture + the three CoreAudio traps
 docs/app-design.md         # app architecture, bundle, SMAppService, invariants
 docs/app-ui.md             # app interface spec and Apple conventions
 docs/verification.md       # measured numbers, test matrix, open issues
+docs/cli.md                # the CLI and the source install, for developers. English only
+packaging/micpeg.rb        # the Homebrew Cask, copied into the tap per release
 docs/ko/engineering-log.md # original Korean development log
 CONTRIBUTING.md            # the rules CI enforces, for humans. CLAUDE.md is the long version
-.github/workflows/ci.yml   # pins Xcode by SDK, builds, runs the three check scripts
+.github/workflows/ci.yml   # pins Xcode by SDK, builds, runs the check scripts + bundle.sh
+.github/workflows/release.yml # on a v* tag: build, notarize, DMG, GitHub Release
 .github/ISSUE_TEMPLATE/    # bug report; asks for status + log lines, warns off `micpeg list`
 ```
 
@@ -148,15 +174,53 @@ Runtime files, all outside the repo:
 the agent registered from `Micpeg.app/Contents/Library/LaunchAgents/`, and the app's defaults
 domain `com.micpeg.app` — where it registered from, and `AppleLanguages` if a language was chosen.
 
+## Releasing
+
+**The tag is `v` + `CFBundleShortVersionString`**, and `bundle/Info.plist` is the only place
+either number lives. `scripts/version.sh --expect` refuses a tag that disagrees and
+`--check-bump` refuses a `CFBundleVersion` that did not rise; the release workflow runs both
+before anything is signed.
+
+```sh
+MICPEG_RELEASE=1 ./scripts/bundle.sh        # Developer ID required, or it refuses
+./scripts/notarize.sh build/Micpeg.app      # zip, submit, staple the .app
+./scripts/dmg.sh                            # package the stapled app, sign, mount, check
+./scripts/notarize.sh build/Micpeg-0.9.0.dmg
+```
+
+`MICPEG_DMG_UNSIGNED=1 ./scripts/dmg.sh` exercises the packaging with no certificate.
+
+**Both artifacts are notarized**, in that order. A DMG-only ticket leaves the app without one
+once it is dragged out, and Gatekeeper then falls back to an online lookup — so first launch
+depends on Apple's uptime and the user's network. A stapled `.app` launches with the Wi-Fi off.
+
+One-time, on a developer's Mac:
+`xcrun notarytool store-credentials micpeg-notary --apple-id … --team-id … --password <app-specific>`.
+In CI it is an App Store Connect API key; the six repository secrets are named in
+`.github/workflows/release.yml`.
+
+`packaging/micpeg.rb` is the Cask. Its `sha256` cannot be predicted — `hdiutil` embeds
+timestamps, so two builds of identical source differ — so it comes from the published
+`.sha256` asset, and the release job prints a paste-ready stanza to the job summary rather
+than committing one nobody read.
+
+**The release runner is `macos-14`, pinned to the same SDK as CI.** AppKit and SwiftUI key
+behaviour off the SDK an app was linked against, so building the shipped artifact on a newer one
+hands users a binary whose runtime behaviour was never tested — and bypasses the gate the
+"green local build is not a green CI build" rule depends on.
+
 ## Development workflow
 
 ```sh
 swift build -c release                              # host arch
 swift build -c release --arch arm64 --arch x86_64   # universal
 ./scripts/bundle.sh                                 # assemble + sign Micpeg.app
+MICPEG_ADHOC=1 ./scripts/bundle.sh                  # ...with no certificate at all; CI does this
 ./scripts/invariants.sh                             # the structural greps above
 ./scripts/l10n-check.sh                             # every localizable string has Korean
 ./scripts/id-check.sh                               # no device identifier is committed
+./scripts/version.sh                                # "0.9.0 2", from bundle/Info.plist
+swift scripts/make-icon.swift                       # redraw bundle/AppIcon.iconset
 defaults read com.micpeg.app AppleLanguages         # the language chosen in Settings, if any
 
 micpeg status

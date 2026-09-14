@@ -281,7 +281,20 @@ must do:
   `register()` over a purged record creates a new BTM entry while leaving the old launchd job
   in place, and the next spawn fails with `EX_CONFIG` — measured. `unregister()` also does
   nothing at all when `status` is `.notFound`, so its return value proves nothing either.
-- Stage 5's uninstall instructions cannot be "drag it to the Trash" alone.
+- **Removal is something the app does, not an instruction.** "Drag it to the Trash" is not
+  enough and never was: §3 measured the daemon surviving on its inode and the launchd job
+  surviving as unspawnable, and §28 measured the Background Task Management record and its Login
+  Items entry surviving a move, the Trash, and emptying the Trash. Only `SMAppService.unregister()`
+  clears that record, so only the app can do it. Implemented in `Sources/MicpegApp/Uninstall.swift`,
+  reached from Settings ▸ Remove Micpeg; `docs/app-ui.md` has the interface and the copy. It
+  cannot be a `micpeg` subcommand — `scripts/invariants.sh` holds the daemon's imports to
+  CoreAudio, Darwin, Foundation and MicpegAudio, so the CLI can never call ServiceManagement.
+- **A registration must never be created from a bundle that cannot hold one.** An app opened from
+  a mounted disk image, or the read-only translocated copy macOS makes of a quarantined app opened
+  in place, records a path that ceases to exist — and then reads as `.moved` on the next launch and
+  repairs a move that never happened, taking the label from a copy that legitimately holds it.
+  `Sources/MicpegApp/InstallLocation.swift` tests the symptom (a read-only or removable volume)
+  rather than the mechanism, and `reconcile()` returns before the survey.
 
 Two states need real handling, not just a success path:
 
@@ -468,4 +481,7 @@ finished would invert the whole schedule.
    agent.** Confirm on real hardware before continuing.
 3. **Migration from the legacy install.**
 4. **The interface** — states, device sheet, level meter.
-5. **Release pipeline** — notarized DMG, Homebrew Cask, README revision.
+5. **Release pipeline** — notarized DMG, Homebrew Cask, README revision. **Done.** The app
+   icon, the install-location guard, in-app removal, `scripts/{pin-xcode,version,signing-identity,
+   notarize,dmg}.sh`, `.github/workflows/release.yml`, `packaging/micpeg.rb`, and both READMEs
+   rewritten around the app. `CLAUDE.md`, "Releasing", is the operator's version.

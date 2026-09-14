@@ -101,6 +101,7 @@ inner rhythm; do not add manual padding between its rows.
 
 | State | Source |
 |---|---|
+| Can't run from here | the bundle is on a read-only or removable volume |
 | Unconfigured | no `config.json`, or an empty priority list |
 | Active (`PINNED`) | `state.json` |
 | Waiting (`ABSENT`) | `state.json` |
@@ -123,6 +124,32 @@ Activity is not in the skeleton. It was, as a disclosure under the meter, and it
 element able to change the window's height; with the window sized to its content, expanding it
 resized the window itself. It has its own window now — see [Activity](#activity).
 
+### Can't run from here
+
+Outranks everything, including the banner, and replaces the whole body:
+
+```
+  ⬇  Micpeg needs to be in your Applications folder
+     It's running from a location it can't be installed from. Quit Micpeg,
+     move it to the Applications folder, and open it from there.
+```
+
+Measured at 460×160 on macOS 26.6 from a mounted disk image: two static texts, no device list,
+no Keep button, no banner.
+
+A state rather than an alert, because an alert is dismissible and a dismissed alert leaves the
+user pressing Keep from the same place. **No button.** The only one available would reveal the
+bundle in the Finder, and from a translocated launch that puts a randomised
+`/private/var/folders/…/AppTranslocation/` path on screen and points at a directory the user
+cannot act on — which is this section's own rule broken by another route. The app also cannot
+move itself: `scripts/invariants.sh` forbids `moveItem` in the app, and nothing Micpeg ships asks
+for an administrator password.
+
+This is not "you are not in /Applications". §28 measured that a move does not break a registration
+on macOS 26.6, and warning someone in `~/Downloads` about a problem that does not exist there is
+noise — it would also block running `build/Micpeg.app` during development. One tier, for a volume
+that cannot hold an installation.
+
 ### Unconfigured
 
 ```
@@ -132,6 +159,9 @@ resized the window itself. It has its own window now — see [Activity](#activit
 │   When a Bluetooth headset connects,       │
 │   macOS moves your microphone to it.       │
 │   Choose the microphone to keep.           │
+│   It stays selected from then on,          │
+│   including after you disconnect the       │
+│   headset.                                 │
 │                                            │
 │   ┌──────────────────────────────────────┐ │
 │   │  ◉  Elgato Wave:1              usb   │ │
@@ -157,6 +187,24 @@ The `⚠` marks a device on a blocked transport. Pinning a Bluetooth device whil
 
 The closing sentence pre-announces the system notification about background items. Without it,
 that notification reads as something installing itself behind the user's back.
+
+The third line of the opening says what will be true *afterwards*. The headline states the problem
+and the instruction says what to do; someone who has just downloaded this has no sentence telling
+them what they get. It deliberately says nothing about what connecting a headset does to output —
+the claim that pinning the input keeps AirPods in A2DP is embargoed until it is observed on
+hardware, and a line like this one is exactly where it would get smuggled in.
+
+**The button is titled "Keep Microphone" when nothing is selected**, not "Keep None". It is
+disabled either way, so the title is only ever read — but `suggestedChoice` returns nil when the
+current input is on a blocked transport, which is precisely a fresh install on a Mac whose only
+input is a headset, and "Keep None" was the first sentence that user saw.
+
+**The device list scrolls past six devices**, inside a fixed cap, while the headline, the footer
+and the Keep button stay put. The window is sized to its content with scrolling disabled, so a
+longer list is *clipped*, not scrolled, and the row that goes off the bottom is the Keep button —
+which §22 measured stays in the accessibility tree while off screen, so nothing automated notices.
+Ten inputs is not exotic: an aggregate device, a multi-channel interface, Continuity Mic and a
+webcam reach it. The threshold is not measured; §29 is where the long list gets looked at.
 
 ### Active
 
@@ -233,6 +281,46 @@ Informational styling, secondary color. No red, no warning symbol.
 The button opens System Settings directly. Telling a user to "go to System Settings" without
 taking them there is where this flow usually dies.
 
+### Removing Micpeg
+
+```
+              Remove Micpeg?
+
+  This turns off the background helper, removes the
+  login item, and deletes Micpeg's settings and its
+  log. Micpeg then quits and shows itself in the
+  Finder, so you can move it to the Trash.
+
+              [ Cancel ]  [ Remove ]
+```
+
+A `confirmationDialog` with a destructive role, the same shape as the main window's
+blocked-device confirmation.
+
+- **Why it exists at all.** Dragging Micpeg to the Trash is not a removal. §3 measured the daemon
+  surviving on its inode and the launchd job surviving as unspawnable; §28 measured the Background
+  Task Management record and its Login Items entry surviving a move, the Trash, *and* emptying the
+  Trash. The user is left with a switch in System Settings for an app that no longer exists. Only
+  `SMAppService.unregister()` clears it, so only the app can do this.
+- **In Settings, not the main window.** The main window answers "is it working?", and this is not
+  that question. Not a second pane either — see the one-pane argument above; a fourth section is a
+  row, a pane is machinery.
+- **The word is Remove, never Uninstall.** The bundle stays where it is: `scripts/invariants.sh`
+  forbids `trashItem` in the app, and a process deleting the executable it is running from is a
+  bad idea independent of any rule. Revealing it in the Finder and quitting is the honest ending,
+  and the dialog says so before anything happens.
+- **The footer earns its line.** The helper's whole job is writing the default input, so anyone
+  removing it wants to know whether their microphone is about to change. It is not.
+- **What it clears:** the registration, the launchd job, the legacy plist if one is there,
+  `~/.config/micpeg/{config,state}.json` (and the directory, only if it is then empty),
+  `~/Library/Logs/micpeg.log`, `~/.local/bin/micpeg` *only when it is this bundle's own symlink*,
+  and the two values in `com.micpeg.app`. A regular file at `~/.local/bin/micpeg` is the
+  standalone command-line install and is left alone — it is the user's.
+- **A Homebrew `zap` is not equivalent**, and the Cask says so in its caveats: `uninstall
+  launchctl:` boots the job out but cannot clear a record that is not a file, and a cask cannot
+  tell a symlink into the bundle from a standalone install. The supported order is Remove in the
+  app, then `brew uninstall`.
+
 ## Activity
 
 What happened to the microphone, in a window of its own: Window ▸ Activity (⌥⌘L), and the
@@ -302,12 +390,17 @@ microphone; that stays in the main window.
 │   microphone. The log file is the       │
 │   background helper's full record.      │
 │ ┌─────────────────────────────────────┐ │
-│ │ Version                    0.1.0 (1)│ │
+│ │ Version                    0.9.0 (2)│ │
 │ │ License          MIT License  [View]│ │
 │ │ Source Code  github.com/OakGimbap/… │ │
 │ └─────────────────────────────────────┘ │
 │   Micpeg uses no third-party code, so   │
 │   there are no other licenses to list.  │
+│ ┌─────────────────────────────────────┐ │
+│ │ Remove Micpeg              [Remove…]│ │
+│ └─────────────────────────────────────┘ │
+│   Your microphone choice in System      │
+│   Settings is not changed.              │
 └─────────────────────────────────────────┘
 ```
 
@@ -450,7 +543,43 @@ provide. Follow Apple's app-icon guidance for shape, margins and rendering; a fl
 square canvas is immediately recognizable as third-party.
 
 Not on the critical path — it can proceed in parallel with the code — but do not ship without
-it.
+it. `scripts/bundle.sh` warns when `bundle/AppIcon.iconset` is missing and **fails** under
+`MICPEG_RELEASE=1`, so that rule is enforced rather than remembered.
+
+**Shipped as an iconset compiled at bundle time, not as a committed `.icns`.** `iconutil` rejects
+a member that is misnamed or the wrong size; a hand-assembled `.icns` missing its 1024px member
+assembles without complaint and produces a blurry Dock icon with no error anywhere. Ten PNGs are
+each independently inspectable and diffable, and `bundle/` is where `bundle.sh`'s inputs live.
+`scripts/make-icon.swift` draws them — CGPaths only, because Apple's SF Symbols licence forbids
+their use in app icons — on the 1024 grid Apple's template uses: an 824×824 body centred in a 1024
+canvas, which leaves the 100-pixel margin the system expects for the shadow.
+
+**The 16- and 32-pixel members are drawn differently, on purpose.** The shapes are described once
+in the 1024 grid and scaled, which is right for areas and wrong for lines: the cradle's 46-unit
+stroke is 5.75 px at 128 and **0.72 px at 16**, below one pixel, so it rendered as a grey smear and
+the mark stopped reading as a microphone at exactly the size System Settings ▸ Login Items and ⌘Tab
+use. The strokes now have a floor in rendered pixels, converted back into grid units.
+
+Thickening alone was not enough, and the measurement is the reason to keep this paragraph: at 16
+the cradle's lower arc, the stem and the stand's bar all land inside about four pixels of height,
+so a heavier pen made them merge instead of resolve. Three candidates were rendered at 10× and
+compared. Dropping the **stand bar** at 16 was the only one that still read as a microphone —
+dropping the cradle instead reads as an exclamation mark. So 16 is the capsule and the cradle and
+nothing else; 32 and up are unchanged. The shadow and the one-pixel highlight are also off below
+64, where they only soften the edge the glyph needs.
+
+If a future change makes the small members look wrong, regenerate and **look at them magnified**
+before adjusting the geometry: `swift scripts/make-icon.swift` writes every size, and the 16-pixel
+member is the one that decides.
+
+`CFBundleIconFile`, never `CFBundleIconName`: the latter names an entry in a compiled asset
+catalog, there is no `Assets.car` and no Xcode project to produce one, and setting it without a
+catalog leaves Finder unable to resolve the icon at all.
+
+**Known limitation, decided rather than overlooked:** macOS 26's Icon Composer `.icon` format
+needs Xcode 26 and the macOS 26 SDK, which contradicts the macOS 14 SDK pin CI and the release
+build both depend on. An `.icns` still renders on macOS 26 under the system's automatic
+treatment.
 
 ## Never in this window
 

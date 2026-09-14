@@ -1,4 +1,4 @@
-# micpeg
+# Micpeg
 
 **Keep your USB microphone as the macOS default input, even when AirPods connect.**
 
@@ -21,189 +21,148 @@ There is no first-party setting to turn this off. `com.apple.coreaudio` and
 `com.apple.audio.AudioMIDISetup` have no preference domain at all, and a full sweep of
 `defaults domains` turns up no suppression key.
 
-## What micpeg does
+## What Micpeg does
 
-A ~4 MB launchd agent that watches the CoreAudio default-input property and puts it back
-when macOS hands it to a Bluetooth device.
+A small app that lets you pick a microphone, and a ~4 MB background helper that watches the
+CoreAudio default-input property and puts it back when macOS hands it to a Bluetooth device.
 
-- **Input only.** The background agent's source never contains `DefaultOutputDevice` or
-  `DefaultSystemOutputDevice`, and CI checks that. The settings app reads the default output
-  only to display it, and writes nothing to CoreAudio at all. Your AirPods still take over
-  audio output, as they should.
-- **Respects your choices.** Pick a different microphone yourself and micpeg yields. It only
+- **Input only.** The background helper's source never contains `DefaultOutputDevice` or
+  `DefaultSystemOutputDevice`, and CI checks that. The app reads the default output only to
+  display it, and writes nothing to CoreAudio at all. Your AirPods still take over audio output,
+  as they should.
+- **Respects your choices.** Pick a different microphone yourself and Micpeg yields. It only
   reverses transitions it can attribute to the system.
 - **Effectively free.** 3 idle wakeups, ~4 MB `phys_footprint` and 0.59 s of CPU across 24
-  hours of real use. It parks on `CFRunLoopRun()` with no polling and no repeating timers — it
-  does nothing at all until CoreAudio sends a notification. See
+  hours of real use. The helper parks on `CFRunLoopRun()` with no polling and no repeating timers
+  — it does nothing at all until CoreAudio sends a notification. See
   [docs/verification.md](docs/verification.md).
-- **The agent never opens the microphone.** It sets a routing preference; it does not capture.
-  No orange recording indicator, no TCC prompt, no interference with whatever app currently
-  holds the mic. The settings app opens it only while you run its input test, and asks for
+- **The background helper never opens the microphone.** It sets a routing preference; it does not
+  capture. No orange recording indicator, no permission prompt, no interference with whatever app
+  currently holds the mic. The app opens it only while you run its input test, and asks for
   permission the first time.
-
-## Two pieces
-
-- **`micpeg`** — the launchd agent and its command-line interface. This is the program, and it
-  is finished. Everything below installs and drives this.
-- **`Micpeg.app`** — a small SwiftUI settings app: pick a microphone, confirm the agent is
-  working, run an input test. It is built and exercised, but **not distributed yet.** There is
-  no signed download; `./scripts/bundle.sh` assembles it and signs it with whatever development
-  certificate you already have, which is enough to run it yourself and not enough to hand to
-  anyone else. A Developer ID build is the next piece of work.
+- **It never connects to anything.** No update check, no analytics, no network code of any kind —
+  CI fails the build if any appears. The only link it can open is the one to this page, in your
+  browser.
 
 ## Requirements
 
-- macOS 14 (Sonoma) or later
-- Swift 5.9+ toolchain (Xcode or the Swift command-line tools)
+macOS 14 (Sonoma) or later.
 
-The agent needs neither: it links CoreAudio and Foundation and would run on far older releases.
-The floor comes from the settings app — `@Observable` is macOS 14 — and SwiftPM applies
-`platforms:` package-wide, so the agent inherits it.
-
-> **Honest scope note:** micpeg builds for macOS 14+, but it has only been exercised on real
-> hardware on macOS 26 (26.6). In particular, whether `kAudioHardwarePropertyServiceRestarted`
-> (the HAL-restart recovery hook) actually fires on macOS 14 and 15 is unverified. If it does
-> not, the listener simply never gets called — degraded, not harmful.
+> **Honest scope note:** Micpeg builds for macOS 14+, but it has only been exercised on real
+> hardware on macOS 26 (26.6), on Apple Silicon. In particular, whether
+> `kAudioHardwarePropertyServiceRestarted` (the HAL-restart recovery hook) actually fires on
+> macOS 14 and 15 is unverified. If it does not, the listener simply never gets called —
+> degraded, not harmful.
 
 ## Install
 
-Connect the microphone you want to pin and select it as your default input, then:
+1. Download `Micpeg.dmg` from [the latest release](https://github.com/OakGimbap/micpeg/releases/latest).
+2. Open it and drag **Micpeg** to the **Applications** folder.
+3. Open Micpeg from Applications.
+4. Choose the microphone you want to keep, and press **Keep**.
 
-```sh
-git clone https://github.com/OakGimbap/micpeg.git
-cd micpeg
-./scripts/install.sh
-```
+That is the whole setup. macOS will tell you that a login item was added — that is the background
+helper, and it is what keeps the microphone after you quit the app.
 
-That builds the binary, copies it to `~/.local/bin/micpeg`, writes
-`~/Library/LaunchAgents/com.micpeg.agent.plist`, seeds the config from your **current**
-default input, and starts the agent. No `sudo` — everything stays under your home directory.
+Open it from the disk image rather than dragging it first and Micpeg says so and refuses to set
+anything up: macOS runs an app opened in place from a read-only copy that disappears when the
+image is ejected, and a helper registered from there would quietly stop working.
 
-This installs the agent, not the app. The script refuses to run if `Micpeg.app` is already
-managing the agent: one launchd label cannot have two registration paths.
+If you use Homebrew: `brew install --cask oakgimbap/tap/micpeg`.
 
-For a universal (Apple Silicon + Intel) binary: `MICPEG_UNIVERSAL=1 ./scripts/install.sh`
+## Using it
 
-Make sure `~/.local/bin` is on your `PATH`, then check it:
+Micpeg is an app you open a few times, not one you leave running. Quitting it changes nothing —
+the background helper is a login item and keeps going.
 
-```sh
-micpeg status
-```
+- **Change the microphone:** open Micpeg, press **Change Microphone**, pick one.
+- **Turn it off for a while:** press **Pause**. **Resume** puts it back.
+- **See what it has been doing:** Window ▸ Activity (⌥⌘L) lists every switch it reversed and
+  every choice it yielded to.
+- **Check the microphone actually works:** press **Start Test** and speak. The meter moves.
+- **Turn the helper off entirely:** System Settings ▸ General ▸ Login Items & Extensions. Micpeg
+  notices and tells you it is switched off.
 
-```
-enabled:       true
-default input: Elgato Wave:1 [usb ]
-target[0]:     Elgato Wave:1  — present
-state:         PINNED  (default input is the target)
-updated:       2026-09-10 16:12:05.732
-daemon:        pid = 20138
-```
+## Updating
 
-### Updating
+Download the new disk image and drag it over the copy in Applications, or
+`brew upgrade --cask micpeg`. The registration survives being replaced in place.
 
-```sh
-git pull
-./scripts/install.sh
-```
+Replacing the app restarts the background helper, and a restarted helper does not remember that
+you had switched to another microphone by hand — it applies your kept microphone again. If you
+were deliberately using something else, check after updating.
 
-The script stages the freshly built binary itself and then re-bootstraps the agent, so an
-upgrade actually takes effect.
+## Removing Micpeg
 
-## Commands
+Open Micpeg, go to **Settings** (⌘,) and press **Remove…**. That turns off the background helper,
+removes the login item, and deletes Micpeg's settings and its log. Micpeg then quits and shows
+itself in the Finder so you can drag it to the Trash.
 
-| Command | What it does |
-|---|---|
-| `micpeg status` | Current state, pinned target, live default input, daemon liveness |
-| `micpeg list` | Every input device with its transport type and UID |
-| `micpeg pick [uid]` | Make the current default input the pinned target, replacing the previous one. Given a `uid`, pin that device instead — it must be connected and publish an input scope |
-| `micpeg on` / `off` | Resume / pause pinning (also clears a yield) |
-| `micpeg link` | Symlink `~/.local/bin/micpeg` to the running binary, putting it on your PATH. `--force` replaces a real file already sitting there — that file is the standalone CLI install |
-| `micpeg install` | Write config + LaunchAgent and bootstrap the agent |
-| `micpeg uninstall` | Bootout the agent and remove its LaunchAgent and its state file |
-| `micpeg daemon` | Run in the foreground (used by launchd) |
+**Do this before deleting the app, not after.** Dragging Micpeg to the Trash on its own leaves the
+login item behind — measured on macOS 26.6, it survives moving the app, trashing it, and emptying
+the Trash. The same applies to `brew uninstall`: remove it in the app first.
 
-To change which mic is pinned: select it in System Settings, then run `micpeg pick`.
-
-## Configuration
-
-`~/.config/micpeg/config.json` — see [`config.example.json`](config.example.json).
-Send `launchctl kill SIGHUP gui/$(id -u)/com.micpeg.agent` to reload without restarting,
-or just run `micpeg on`.
-
-| Key | Default | Meaning |
-|---|---|---|
-| `enabled` | `true` | Master switch. `micpeg off` sets this. |
-| `input.priority` | *(from install)* | Ordered list of `{uid, name}`. The first one present wins. UID is matched first; `name` is a fallback. `micpeg pick` writes a list of one; a longer list is for editing by hand. |
-| `blockTransports` | `["bluetooth", "bluetoothle"]` | Transports micpeg will reverse. Everything else is treated as a deliberate choice. |
-| `arrivalWindowSeconds` | `15` | A blocked device that appeared this recently is an automatic switch, not your decision. |
-| `debounceMs` | `300` | Coalesces notification bursts. |
-| `reverifyDelaySeconds` | `1.0` | Re-checks once after writing, in case the write was swallowed. |
-| `postWriteGraceSeconds` | `3.0` | If the default moves this soon after micpeg wrote it, it is macOS flipping back — not a human. |
-
-A device UID survives reboots and USB port changes (a USB mic's UID embeds its serial
-number), which is why micpeg targets UIDs rather than names or device IDs.
-
-**Do not add `virtual` or `unknown` to `blockTransports`.** Elgato's own guidance tells you
-to select a Wave Link *virtual* device as your default input when using MicrophoneFX, and
-Continuity iPhone Mic reports as `ccwd`. Blocking those fights the user.
-
-## How it works
-
-Three `AudioObjectAddPropertyListenerBlock` listeners on the system object — device list
-(`dev#`), default input (`dIn `), and HAL restart (`srst`) — feeding a five-state machine
-(`ABSENT` / `PINNED` / `YIELDED` / `PAUSED` / `BACKOFF`).
-
-Whether a change was automatic or deliberate is decided primarily by **transport type**, not
-by timing: Bluetooth is the only path by which macOS takes the default input on its own.
-Timing is a secondary signal, and the strongest evidence of all is micpeg's own write clock —
-if the default moves 400 ms after micpeg set it, no human did that.
-
-Full rationale, including three design defects found and fixed before shipping:
-**[docs/design.md](docs/design.md)**. The original development log (Korean) is at
-[docs/ko/engineering-log.md](docs/ko/engineering-log.md).
-
-## What micpeg deliberately does not do
+## What Micpeg deliberately does not do
 
 - Touch the default output or system output — not even as an option. It is not in the config
   schema, so it cannot be switched on by mistake.
-- Force a fallback when your target mic is unplugged. With no target present micpeg goes
-  `ABSENT` and does nothing; macOS behaves normally.
+- Force a fallback when your chosen mic is unplugged. With no target present Micpeg does nothing
+  and macOS behaves normally.
 - Run a polling loop. A `StartInterval 5` agent would wake up 17,280 times a day.
+- Reach the network, in any form.
 
 ## Known limitations
 
 - **A deliberate Bluetooth mic choice made within ~15 s of connecting it gets reverted once.**
   There is no signal anywhere in CoreAudio that says who initiated a change
   (`log stream --predicate 'subsystem == "com.apple.coreaudio"'` produces zero lines for these
-  transitions), so this is a heuristic. Pick it again a moment later, or run `micpeg off`.
+  transitions), so this is a heuristic. Pick it again a moment later, or press Pause.
 - The same applies for ~15 s after login or a `coreaudiod` restart.
-- The install prefix is fixed at `~/.local/bin`.
-- **Two unexplained incidents, one of which `micpeg status` does not reveal.** On 2026-09-10
-  the agent reported `PINNED` while the default input actually sat on a Bluetooth headset for
-  ~1.5 h with no log output. On 2026-09-11 the same shape recurred for 42 minutes and ended with
-  the daemon classifying that headset as a settled device and yielding to it. Both followed one
-  of the daemon's own writes away from the headset. Sleep, `coreaudiod` restart, process
-  restart, queue deadlock and a dead listener were all ruled out; a dropped notification and a
-  judgement made against a stale value are the two remaining explanations, and five reproduction
-  attempts failed. Three silently-give-up paths were hardened as insurance. In the first shape
-  `micpeg status` shows a `state:` and a `default input:` that disagree. In the second it
-  reports `YIELDED` and looks correct — protection is simply off until you disconnect the
-  headset. `micpeg on` restores it instantly in both cases.
+- **Two unexplained incidents, one of which the app does not reveal.** On 2026-09-10 the helper
+  reported that it was keeping the microphone while the default input actually sat on a Bluetooth
+  headset for ~1.5 h with no log output. On 2026-09-11 the same shape recurred for 42 minutes and
+  ended with the helper treating that headset as a settled choice and yielding to it. Both
+  followed one of the helper's own writes away from the headset. Sleep, `coreaudiod` restart,
+  process restart, queue deadlock and a dead listener were all ruled out; a dropped notification
+  and a judgement made against a stale value are the two remaining explanations, and five
+  reproduction attempts failed. Three silently-give-up paths were hardened as insurance. In the
+  second shape the window looks correct — it says another microphone is in use — and protection is
+  simply off until you disconnect the headset. Pressing Pause and then Resume restores it
+  instantly in both cases.
 
-## Uninstall
+## How it works
 
-```sh
-micpeg uninstall
-rm -rf ~/.config/micpeg ~/Library/Logs/micpeg.log ~/.local/bin/micpeg
-```
+Three `AudioObjectAddPropertyListenerBlock` listeners on the system object — device list, default
+input, and HAL restart — feeding a five-state machine. Whether a change was automatic or
+deliberate is decided primarily by **transport type**, not by timing: Bluetooth is the only path
+by which macOS takes the default input on its own. Timing is a secondary signal, and the strongest
+evidence of all is Micpeg's own write clock — if the default moves 400 ms after Micpeg set it, no
+human did that.
+
+Full rationale, including three design defects found and fixed before shipping:
+**[docs/design.md](docs/design.md)**. Measured numbers and the test matrix are in
+[docs/verification.md](docs/verification.md). The original development log (Korean) is at
+[docs/ko/engineering-log.md](docs/ko/engineering-log.md).
+
+## For developers
+
+Inside the app bundle there is a command-line tool, `micpeg`. It is the background helper, and it
+is what the app runs for every change it makes — the app itself writes nothing to CoreAudio, which
+is a rule CI enforces rather than a convention. It can also be installed and driven on its own,
+without the app.
+
+Its commands, its configuration file, and how to build and install it from source are in
+**[docs/cli.md](docs/cli.md)**. Building Micpeg itself is in
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Contributing
 
 Bug reports and focused pull requests are welcome. A few of this project's rules are enforced by
 CI rather than by review — read [CONTRIBUTING.md](CONTRIBUTING.md) first, it is short.
 
-When reporting a problem, paste `micpeg status`, not `micpeg list`: a UID embeds a USB serial
-number or a Bluetooth MAC address, and an issue is public.
+When reporting a problem, attach the log — Micpeg ▸ Settings ▸ Log File ▸ **Show in Finder** — and
+say what the Activity window showed. **Do not paste the output of `micpeg list`:** a device UID
+embeds a USB serial number or a Bluetooth MAC address, and an issue is public.
 
 ## License
 

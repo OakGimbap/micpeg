@@ -1874,3 +1874,193 @@ between the `'uidd'` resolution and the write: a race of microseconds no hand ca
 **Still not observed.** The refused revert above. The only input unplugged on a Mac with no
 built-in microphone — this one has one. And the *won't start again* banner, whose verdict is no
 longer reachable on this macOS.
+
+### Stage 5 — the release pipeline
+
+2026-09-14, on macOS 26.6.2 (Darwin 25.6.0), Apple Silicon, against an ad-hoc-signed bundle built
+from this tree. **This section is partial on purpose.** The Gatekeeper half cannot be answered on
+this Mac at all — the keychain holds one Apple Development certificate and no Developer ID
+Application certificate, so nothing here has been notarized, and a Mac that has already run
+unsigned builds of `com.micpeg.app` cannot answer a first-open question anyway. What is recorded
+below is what was actually run; what is not is listed at the end and stays open.
+
+#### 29. The install-location guard, measured against a real disk image
+
+The primitive first, in isolation, against three locations:
+
+```
+--- on a mounted read-only UDZO image ---
+readOnly=true  removable=true   -> blocked=true
+--- in the repo's build directory ---
+readOnly=false removable=false  -> blocked=false
+--- /Applications ---
+readOnly=false removable=false  -> blocked=false
+```
+
+One pair of `URLResourceValues` separates the case that must be refused from the two that must
+not, with no private API and no path-substring match on `/AppTranslocation/`. The development
+path — running `build/Micpeg.app` straight out of the tree — is unaffected, which was the other
+requirement.
+
+Then end to end. `Micpeg.app` was packaged into a read-only image, the image mounted, and the app
+launched **from the image**, with a healthy installation already registered from `/Applications`.
+Its window, read through the accessibility API (never AppleScript's `title of`):
+
+```
+AXWindow title=Micpeg frame=460x160
+  AXGroup frame=460x160
+    AXScrollArea frame=460x128
+      AXGroup frame=420x88
+        AXStaticText value=Micpeg needs to be in your Applications folder     frame=288x16
+        AXStaticText value=It's running from a location it can't be installed
+                           from. Quit Micpeg, move it to the Applications
+                           folder, and open it from there.                    frame=362x48
+```
+
+Two static texts and nothing else: no device list, no Keep button, no banner, and the window 160
+points tall instead of the usual 346. The existing registration was untouched — `launchctl print`
+still showed `pid = 68987`, `program identifier = Contents/MacOS/micpeg`, submitted by
+ServiceManagement, running from `/Applications/Micpeg.app`.
+
+Worth recording: `MicpegApp survey` run from the mounted image reports `FOREIGN BUNDLE`, not
+`MOVED`, because another copy legitimately held the label at that moment. On a Mac with **no**
+other copy — the ordinary case for a new user — the same launch would have read as `MOVED` with
+a recorded bundle that is gone, and `reconcile()`'s automatic repair would have registered from a
+path that disappears on eject. That is the failure the early return exists for.
+
+**Not answered here:** whether `SecTranslocateIsTranslocatedURL` and the volume check ever
+disagree, and what the guard does for an app opened from `~/Downloads` with the quarantine
+attribute really set by a browser. Both need a downloaded, signed build.
+
+#### 29b. The icon, at the size that decides it
+
+The first iconset scaled one drawing to every size, and the small members lost the cradle: at 16
+its stroke renders 0.72 px wide, so it came out as a grey smear and the mark did not read as a
+microphone. Giving the strokes a floor in rendered pixels fixed 32 and **did not fix 16** — there
+the cradle's lower arc, the stem and the stand's bar occupy about four pixels of height together,
+and a heavier pen merged them into two bars and a blur.
+
+Three candidates rendered at 10× and compared side by side:
+
+| | 16 px |
+|---|---|
+| thicker pen only | cradle and stand bar merge; two horizontal smears under the capsule |
+| **no stand bar** | **capsule and a clean U below it — still a microphone** |
+| no cradle | reads as an exclamation mark |
+
+Shipped: 16 keeps the capsule and the cradle only; 32 and up are unchanged; the shadow and the
+one-pixel highlight are off below 64. `docs/app-ui.md`, "App icon", carries the reasoning so the
+size-specific branch is not tidied away later.
+
+Still to look at on hardware: the icon in the Dock, ⌘Tab, Get Info, System Settings ▸ Login Items
+and the TCC prompt, **on a machine that has not cached an earlier build's icon** — Finder will
+happily show a stale generic icon and send someone chasing a bug that is not there.
+
+#### 30. What the new interface actually draws
+
+Read through the accessibility API, not looked at. The Settings window, with the removal section
+added:
+
+```
+AXWindow title=Micpeg Settings frame=460x501
+  …
+  AXGroup frame=420x114
+    AXStaticText value=Version        AXStaticText value=0.9.0 (2)
+    AXStaticText value=License        AXStaticText value=MIT License   AXButton desc=View
+    AXStaticText value=Source Code    AXLink desc=github.com/OakGimbap/micpeg
+  AXStaticText value=Micpeg uses no third-party code, so there are no other licenses to list.
+  AXGroup frame=420x40
+    AXStaticText value=Remove Micpeg  AXButton desc=Remove… frame=83x24
+  AXStaticText value=Your microphone choice in System Settings is not changed.
+```
+
+460×501, up from the 460×407 §25 measured — the fourth section costs 94 points, and the window is
+still sized to its content with nothing scrolled. The button and the footer are both on screen,
+with real frames, which is the check §22 taught: presence in the tree is not presence on screen.
+
+**The Remove button was not pressed.** This Mac has a real installation, and §29's list below
+still calls the removal itself unobserved. The copy under test was `build/Micpeg.app`, launched
+while `/Applications/Micpeg.app` legitimately held the label — which is also what produced the
+correct banner in the main window, *«Another copy of Micpeg is doing this / The copy at
+/Applications/Micpeg.app set up the background helper and it's running»*, and confirmed that the
+install-location guard does not block the development path.
+
+#### 30b. The packaging, exercised without a certificate
+
+`MICPEG_DMG_UNSIGNED=1 ./scripts/dmg.sh`, which skips the ticket check and the signature and runs
+everything else:
+
+```
+created: build/Micpeg-0.9.0.dmg
+attached at /Volumes/Micpeg 0.9.0
+ok:   /Applications symlink present
+      /Volumes/Micpeg 0.9.0/Micpeg.app: valid on disk
+      /Volumes/Micpeg 0.9.0/Micpeg.app: satisfies its Designated Requirement
+ok:   the app in the image verifies
+ok:   architectures            arm64
+ok:   version in the image     0.9.0
+built build/Micpeg-0.9.0.dmg (964K)
+```
+
+964 KB for a host-architecture build; a universal one is roughly double. The image is checked by
+mounting it and looking, not by trusting `hdiutil` — the same rule the rest of this file runs on.
+
+#### 31. The new structural checks catch what they claim to
+
+Each invariant was proved by planting a violation, not by reading it:
+
+```
+Sources/MicpegUI/Coalescer.swift:47:let probe = URLSession.shared
+FAIL: nothing shipped opens a network connection (URLSession)
+Sources/MicpegUI/Coalescer.swift:48:let u = URL(string: "https://example.com")
+FAIL: only SettingsWindow.swift and SystemSettings.swift construct a URL from a string
+
+Sources/MicpegUI/Coalescer.swift:47:func zap(_ u: URL) throws { try FileManager.default.removeItem(at: u) }
+FAIL: only Migration.swift and Uninstall.swift delete a file
+```
+
+One of them caught its own author first. The network check was written above the point where
+`only_in()` is defined, so the URL clause ran as an undefined command, printed nothing, and the
+suite still exited 0 — a check that passed by doing nothing, which is the exact shape
+`invariants.sh`'s own header was written against. It is now below the definition, and the planted
+violation above is what proves it.
+
+`bundle.sh` also gained three assertions that had no way of failing before: the icon exists and
+its largest member really is 1024 px, neither executable carries
+`com.apple.security.get-task-allow` (the most common notarization rejection, whose symptom is
+otherwise a failure three minutes into a submission), and both are signed with the hardened
+runtime — which is a signature flag, so the existing entitlement dump could not see it.
+
+And CI now runs `MICPEG_ADHOC=1 ./scripts/bundle.sh` on every pull request. Five checks that
+already existed — the `MacOS` case-collision guard, the `BundleProgram` resolution, the
+`plutil -lint` sweep, the `CFBundleLocalizations` agreement, and now the icon — had never been run
+by anything but a maintainer's own shell.
+
+#### Still not observed
+
+Everything that needs a Developer ID Application certificate, a notarized build, or a machine that
+has never seen this bundle:
+
+- A browser download with a real `com.apple.quarantine` attribute, and the first-open dialog's
+  exact wording. `curl` does not set the attribute, so a `curl`-based test proves nothing.
+- `spctl --assess --type execute -vv` returning `source=Notarized Developer ID`. This is the line
+  that retires "a stage 5 concern" in the Stage 2 matrix.
+- **Stapling, which only proves itself offline.** Validate the ticket, then turn the network off
+  and launch. A ticket that resolves only online is precisely the failure the two-pass
+  notarization exists to prevent, and this is the only test that tells the two apart.
+- Whether `com.apple.security.device.audio-input` is *necessary* under the hardened runtime. The
+  variable is the hardened runtime rather than notarization, so a locally signed build with the
+  entitlement removed should answer it more cheaply — do that first.
+- The Microphone privacy URL scheme landing on the Microphone pane rather than the top of
+  Privacy & Security.
+- The unconfigured device list past its six-device threshold, on a real screen, reading the Keep
+  button's on-screen **frame** and not merely its presence in the tree (§22's lesson).
+- Removal itself, end to end — §30 confirms the row draws, not that pressing it works:
+  Settings ▸ Remove, then `launchctl print`, `ls ~/.config/micpeg`,
+  `defaults read com.micpeg.app`, and **screenshots of System Settings ▸ Login Items before and
+  after**, which is the measurement this whole feature exists for. Also: a regular file at
+  `~/.local/bin/micpeg` left alone, a symlink removed, and a reinstall afterwards looking like a
+  first run.
+- `brew install --cask`, `brew uninstall`, and `brew zap` on a machine where Remove was *not* used
+  first, recording exactly what survives.
+- Intel. `lipo` proves two slices exist; running one is a different claim.

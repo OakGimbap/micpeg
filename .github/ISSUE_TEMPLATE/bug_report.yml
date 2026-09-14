@@ -9,8 +9,8 @@ body:
         A device UID embeds a USB serial number or a Bluetooth MAC address. This repository's
         CI refuses any commit that contains one, and an issue is just as public.
 
-        `micpeg status` prints device **names** only and is safe to paste. If you need to name a
-        device, its name is enough.
+        The app's Activity window and its log print device **names** only and are safe to paste.
+        So is `micpeg status`. If you need to name a device, its name is enough.
 
   - type: input
     id: macos
@@ -24,10 +24,10 @@ body:
   - type: dropdown
     id: install
     attributes:
-      label: How is micpeg installed?
+      label: How is Micpeg installed?
       options:
+        - Micpeg.app (downloaded, or Homebrew)
         - scripts/install.sh (command line only)
-        - Micpeg.app
         - Not sure
     validations:
       required: true
@@ -40,23 +40,35 @@ body:
       required: true
 
   - type: textarea
+    id: activity
+    attributes:
+      label: What the Activity window showed
+      description: >
+        In the app: Window ▸ Activity (⌥⌘L), around the time it happened. Device names only;
+        safe to paste. Skip this if you use the command line only.
+      render: text
+    validations:
+      required: false
+
+  - type: textarea
     id: status
     attributes:
       label: "`micpeg status` output"
       description: >
-        Run it while the problem is happening if you can — it is a fresh process and names the
-        device actually in use. Device names only; safe to paste.
+        Command-line installs only. Run it while the problem is happening if you can — it is a
+        fresh process and names the device actually in use. Device names only; safe to paste.
       render: text
     validations:
-      required: true
+      required: false
 
   - type: textarea
     id: log
     attributes:
       label: Log lines from around the time it happened
       description: |
-        `~/Library/Logs/micpeg.log`. The daemon writes one line per event and nothing at idle,
-        so a few minutes either side is usually the whole story.
+        `~/Library/Logs/micpeg.log` — in the app, Settings (⌘,) ▸ Log File ▸ **Show in Finder**.
+        The background helper writes one line per event and nothing at idle, so a few minutes
+        either side is usually the whole story.
 
         Three lines carry most of the information: `EVENT dIn` (a default-input change reached
         the daemon), the `JUDGED` line that follows it (what it decided and why), and `REVERT`

@@ -1,6 +1,11 @@
 #!/bin/zsh
 # Build micpeg and install it as a login LaunchAgent.
 #
+# **This is the developer path, not the supported one.** Micpeg is distributed as a notarized
+# Micpeg.app, which registers the same agent through SMAppService and is the only install a user
+# is told about — see README.md. This script installs the standalone command-line agent instead,
+# and the two cannot coexist: one launchd label, one registration path. docs/cli.md has the rest.
+#
 #   ./scripts/install.sh                      # build for this Mac's architecture
 #   MICPEG_UNIVERSAL=1 ./scripts/install.sh   # build a universal (arm64 + x86_64) binary
 #
