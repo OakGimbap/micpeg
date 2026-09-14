@@ -435,10 +435,10 @@ Confirm each before building on it, and record results in [`verification.md`](ve
 |---|---|---|
 | `BundleProgram` resolves correctly for an `SMAppService`-registered agent | `launchctl print gui/$UID/com.micpeg.agent` and read the resolved program path | **confirmed** (stage 2) |
 | Replacing the app in place keeps the registration working | `ditto` a new build over it, restart the agent | **confirmed** (stage 2) |
-| Registration survives moving the app | Move to a different directory, restart the agent | **not reliably** (stages 2, 3) — one direction survived, the other died with `EX_CONFIG`, and launchd never repairs it |
+| Registration survives moving the app | Move to a different directory, restart the agent | **it does, on macOS 26.6** (§28) — launchd holds the program relative to the bundle identifier and resolves it at spawn; `EX_CONFIG` and the purged records of stages 2 and 3 did not reproduce |
 | The app can detect that it has moved | Move the bundle, run the survey from the new path | **only from its own record** (stage 3) — `proc_pidpath` reads healthy through a shell `mv` |
-| `statusForLegacyPlist(at:)` answers about the legacy plist | Bootstrap it, then write one launchd ignores, and compare | **false** (stage 3) — it answers about the label, like `status` |
-| A legacy plist on disk is inert until it is bootstrapped | Write it, bootstrap nothing, watch | **false** (stage 3) — it revives the SMAppService record within a second |
+| `statusForLegacyPlist(at:)` answers about the legacy plist | Bootstrap it, then write one launchd ignores, and compare | **false** (stage 3, again in §28) — it answers about the label, like `status` |
+| A legacy plist on disk is inert until it is bootstrapped | Write it, bootstrap nothing, watch | **false** (stage 3; §28) — it revives the SMAppService record within a second, and on its own turns a healthy install's verdict into LEGACY PRESENT |
 | Deleting the app tears the agent down | Trash the app, then `launchctl print` | **false** (stage 2). Whether emptying the Trash or a login clears it is open |
 | A legacy agent under the same label makes the conflict loud | Bootstrap the old plist, then `register()` | **false** (stage 2) — it is silent, and `status` lies |
 | `.requiresApproval` is reachable | Disable in Login Items, relaunch, observe the status the app reads | **confirmed** (stage 2) — and **not** recoverable in code |

@@ -141,7 +141,8 @@ struct MicpegSettingsApp: App {
             return .notKeeping
         // A daemon is running and nothing will start it again: the orphan a Finder move leaves,
         // or one whose copy of the app is gone. "The background helper isn't running" would be
-        // false today; the repair is the same.
+        // false today; the repair is the same. Unreached on macOS 26.6, where no move purges the
+        // Background Task Management records (§28); the banner behind it is still unobserved.
         case .stale where survey.job.pid != nil:
             return .orphaned
         // These three mean nothing is keeping the microphone: one sentence, one repair.
