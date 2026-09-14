@@ -33,16 +33,30 @@ CoreAudio의 기본 입력 속성을 감시하다가 macOS가 그것을 블루�
 - **사실상 공짜입니다.** idle wakeup 0회, `phys_footprint` 약 4MB, 실사용 24시간 동안 CPU 0.59초.
   타이머도 폴링도 없이 `CFRunLoopRun()`에 파킹해 있다가 CoreAudio 알림이 올 때만 깨어납니다.
   → [docs/verification.md](docs/verification.md)
-- **마이크를 열지 않습니다.** 라우팅 설정을 바꿀 뿐 캡처하지 않으므로 주황색 녹음 표시도,
-  TCC 권한 요청도 없고, 지금 마이크를 쓰고 있는 앱을 방해하지도 않습니다.
+- **에이전트는 마이크를 열지 않습니다.** 라우팅 설정을 바꿀 뿐 캡처하지 않으므로 주황색 녹음
+  표시도, TCC 권한 요청도 없고, 지금 마이크를 쓰고 있는 앱을 방해하지도 않습니다. 설정 앱은
+  입력 테스트를 돌리는 동안에만 마이크를 열고, 그때 처음 한 번 권한을 요청합니다.
+
+## 두 부분
+
+- **`micpeg`** — launchd 에이전트와 그 커맨드라인. 이 프로젝트의 본체이고, 완성돼 있습니다.
+  아래 설치·명령어 항목은 전부 이쪽 이야기입니다.
+- **`Micpeg.app`** — 마이크를 고르고, 에이전트가 동작 중인지 확인하고, 입력 테스트를 돌리는
+  작은 SwiftUI 설정 앱입니다. 만들어 두고 검증도 했지만 **아직 배포하지 않습니다.** 서명된
+  다운로드가 없고, `./scripts/bundle.sh`는 가지고 있는 개발 인증서로 서명할 뿐이라 직접 쓰기에는
+  충분해도 남에게 건네기에는 부족합니다. Developer ID 빌드가 다음 작업입니다.
 
 ## 요구 사항
 
-- macOS 12 (Monterey) 이상
-- Swift 5.7 이상 툴체인 (Xcode 또는 Swift 커맨드라인 도구)
+- macOS 14 (Sonoma) 이상
+- Swift 5.9 이상 툴체인 (Xcode 또는 Swift 커맨드라인 도구)
 
-> **정직한 범위 고지:** macOS 12+로 빌드되지만 **실기기 검증은 macOS 26에서만** 했습니다.
-> 특히 `kAudioHardwarePropertyServiceRestarted`(HAL 재시작 복구 훅)가 구버전에서 실제로
+에이전트 자체는 둘 다 필요 없습니다 — CoreAudio와 Foundation만 링크하므로 훨씬 낮은 버전에서도
+돕니다. 하한은 설정 앱에서 옵니다(`@Observable`이 macOS 14 전용). SwiftPM의 `platforms:`는
+패키지 전체에 적용되므로 에이전트가 그 하한을 물려받습니다.
+
+> **정직한 범위 고지:** macOS 14+로 빌드되지만 **실기기 검증은 macOS 26(26.6)에서만** 했습니다.
+> 특히 `kAudioHardwarePropertyServiceRestarted`(HAL 재시작 복구 훅)가 macOS 14·15에서 실제로
 > 발화하는지는 미검증입니다. 발화하지 않으면 리스너가 안 불릴 뿐 해롭지는 않습니다.
 
 ## 설치
@@ -58,6 +72,9 @@ cd micpeg
 빌드 → `~/.local/bin/micpeg` 복사 → `~/Library/LaunchAgents/com.micpeg.agent.plist` 작성 →
 **현재** 기본 입력으로 설정 초기화 → 에이전트 시작까지 한 번에 합니다. `sudo`가 필요 없습니다 —
 전부 홈 디렉터리 안에서 끝납니다.
+
+이 스크립트가 설치하는 것은 에이전트이고 앱이 아닙니다. 이미 `Micpeg.app`이 에이전트를 관리하고
+있으면 스크립트가 거부합니다 — 하나의 launchd 레이블이 두 개의 등록 경로를 가질 수는 없습니다.
 
 유니버설(Apple Silicon + Intel) 바이너리: `MICPEG_UNIVERSAL=1 ./scripts/install.sh`
 
