@@ -42,13 +42,66 @@ public enum Copy {
     public static let onboardingHeadline =
         String(localized: "When a Bluetooth headset connects, macOS moves your microphone to it.")
     public static let onboardingInstruction = String(localized: "Choose the microphone to keep.")
+    /// The third line of the first run, and the only one that says what will be true afterwards.
+    /// The headline states the problem and the instruction says what to do; someone who has just
+    /// downloaded this still has no sentence telling them what they get. Deliberately says nothing
+    /// about what connecting a headset does to *output* — docs/app-design.md embargoes the claim
+    /// that pinning the input keeps AirPods in A2DP until it has been observed on hardware, and a
+    /// line like this one is exactly where it would get smuggled in.
+    public static let onboardingPromise = String(localized: """
+        It stays selected from then on, including after you disconnect the headset.
+        """)
     public static let deviceListFooter =
         String(localized: "Don't see it? Connect it and it will appear here.")
     public static func keepButton(_ device: String) -> String {
         String(localized: "Keep \(device)")
     }
+    /// The same button with nothing selected yet. It is disabled in that state, so this is only
+    /// ever read, never pressed — but `keepButton(Copy.noDevice)` rendered it as "Keep None",
+    /// which is what a Mac whose only input is a Bluetooth headset shows on first run:
+    /// `suggestedChoice` returns nil for a blocked transport, so nothing is preselected.
+    public static let keepButtonNoChoice = String(localized: "Keep Microphone")
     public static let backgroundHelperNote = String(localized: """
         Enabling adds a background helper. macOS will tell you that a login item was added.
+        """)
+
+    // MARK: Removing Micpeg
+
+    /// Removal lives in Settings because the main window answers "is it working?" and this is not
+    /// that question. The copy never says "uninstall": the app bundle stays where it is, and a
+    /// word that promises otherwise would be the second half of the problem this feature exists
+    /// for — docs/verification.md §3 and §28 measured that dragging Micpeg to the Trash leaves the
+    /// login item behind.
+    public static let removeMicpegLabel = String(localized: "Remove Micpeg")
+    public static let removeMicpegButton = String(localized: "Remove…")
+    public static let removeMicpegTitle = String(localized: "Remove Micpeg?")
+    public static let removeMicpegBody = String(localized: """
+        This turns off the background helper, removes the login item, and deletes Micpeg's \
+        settings and its log. Micpeg then quits and shows itself in the Finder, so you can move \
+        it to the Trash.
+        """)
+    public static let removeMicpegConfirm = String(localized: "Remove")
+    /// Worth its line. The helper's entire job is writing the default input, so anyone removing it
+    /// wants to know whether their microphone is about to change. It is not.
+    public static let removeMicpegFooter = String(localized: """
+        Your microphone choice in System Settings is not changed.
+        """)
+    public static let removeFailed = String(localized: """
+        Micpeg couldn't remove everything. Its background helper may still be set up.
+        """)
+
+    // MARK: Install location
+
+    /// Shown instead of the whole window when Micpeg is running from a mounted disk image or from
+    /// the translocated copy macOS makes of a quarantined app. No button: the only thing that
+    /// could be offered is revealing the bundle in the Finder, and from a translocated launch that
+    /// reveals a randomised path in a directory the user cannot act on — app-ui.md keeps file
+    /// paths out of this window, and putting one in the Finder instead is the same thing.
+    public static let cannotRunHereTitle =
+        String(localized: "Micpeg needs to be in your Applications folder")
+    public static let cannotRunHereBody = String(localized: """
+        It's running from a location it can't be installed from. Quit Micpeg, move it to the \
+        Applications folder, and open it from there.
         """)
 
     // MARK: Rows
@@ -303,10 +356,12 @@ public enum Copy {
 
     /// These are shown to the user, so they belong here rather than inline in the model and the
     /// audio code — the point of this file is that a translation can start and finish in it.
-    public static let microphonePermissionDenied = String(localized: """
-        Micpeg needs permission to use the microphone. Allow it in System Settings > \
-        Privacy & Security > Microphone.
-        """)
+    /// Shorter than it was: the sentence used to end "Allow it in System Settings >
+    /// Privacy & Security > Microphone", which named a destination and left the user to find it.
+    /// The button beside it goes there.
+    public static let microphonePermissionDenied =
+        String(localized: "Micpeg needs permission to use the microphone.")
+    public static let openMicrophoneSettings = String(localized: "Open Microphone Settings")
     public static let microphoneNoChannels =
         String(localized: "This microphone isn't providing any audio channels right now.")
     public static func microphoneCouldNotOpen(_ reason: String) -> String {

@@ -97,6 +97,13 @@ public final class AppModel {
     // MARK: - Observable state
 
     public private(set) var agent: AgentCondition = .checking
+    /// This copy is running from somewhere an installation cannot live — a mounted disk image, or
+    /// the read-only translocated copy macOS makes of a quarantined app opened in place. Its own
+    /// property rather than an `AgentCondition` or a `Body` case: `Body` is derived from
+    /// `config.json` and several things switch on it, and an `InstallSurvey` verdict would still
+    /// be handed to `Migration.migrate()`, which registers. This one has to stop everything before
+    /// any of that, so it sits beside them and outranks both.
+    public private(set) var cannotRunHere = false
     /// Whether the files and devices have been read once. Until then the window draws no body:
     /// `config` starts at `.missing`, and the first frame used to be onboarding — "Keep None" —
     /// for someone who had chosen a microphone long before.
@@ -173,6 +180,7 @@ public final class AppModel {
     }
 
     public func setAgent(_ condition: AgentCondition) { agent = condition }
+    public func setCannotRunHere(_ blocked: Bool) { cannotRunHere = blocked }
 
     // MARK: - Reloading
 
@@ -281,6 +289,11 @@ public final class AppModel {
     /// Exceptions, most serious first. Only one is shown; the rest would be noise stacked on
     /// top of a problem the user has to solve before the others can matter.
     public var banner: Banner? {
+        // Nothing else is true while this is. The window replaces its whole body with one
+        // instruction, and an exception banner above it would be a second thing to read and a
+        // second thing to try, neither of which can work from here.
+        guard !cannotRunHere else { return nil }
+
         // A banner about the microphone not being kept is nonsense before a microphone has
         // been chosen. This is one rule applied once rather than a guard bolted onto whichever
         // condition happened to be noticed first — the earlier version guarded only the
@@ -290,6 +303,12 @@ public final class AppModel {
         // An unreadable settings file is not that case. Someone chose a microphone once, and
         // whether the helper runs is still the first thing they need to know — treated as
         // unconfigured here, a broken file hid a helper that was not running at all.
+        //
+        // This does not hide a failed *first* registration, which is the reading it invites.
+        // `pick` reloads the state before it returns, so by the time MainWindow.keepFirst calls
+        // onFirstChoice() — and MicpegAppMain registers the agent — `body` is already
+        // `.configured` and this is already true. Do not add a guard for a case that cannot
+        // happen; check the order in AppModel.mutate first.
         let hasSomethingToEnforce = body != .unconfigured
 
         // First, nothing is running to keep the microphone at all.

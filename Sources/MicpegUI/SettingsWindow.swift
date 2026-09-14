@@ -21,14 +21,23 @@ public struct SettingsWindow: View {
     /// Launches the app again and quits this copy, or says why it could not. It belongs to the
     /// app target, as registration does: MicpegUI draws, and does not decide the process's life.
     private let onReopen: () async -> String?
+    /// Tears the installation down and quits, or says why it could not. In the app target for the
+    /// same reason as `onReopen`: this one calls `SMAppService.unregister()`, and MicpegUI knows
+    /// nothing about ServiceManagement.
+    private let onRemove: () async -> String?
 
     @State private var language = AppLanguage.chosen
     @State private var reopenFailure: String?
     @State private var showingLicense = false
+    @State private var confirmingRemoval = false
+    @State private var removing = false
+    @State private var removeFailure: String?
     @Environment(\.openWindow) private var openWindow
 
-    public init(onReopen: @escaping () async -> String?) {
+    public init(onReopen: @escaping () async -> String?,
+                onRemove: @escaping () async -> String?) {
         self.onReopen = onReopen
+        self.onRemove = onRemove
     }
 
     public var body: some View {
@@ -36,6 +45,7 @@ public struct SettingsWindow: View {
             languageSection
             activitySection
             aboutSection
+            removeSection
         }
         .formStyle(.grouped)
         // Not a scrolling window. Sized to its content below, it had nothing to scroll to and
@@ -50,6 +60,43 @@ public struct SettingsWindow: View {
         .fixedSize(horizontal: false, vertical: true)
         .sheet(isPresented: $showingLicense) {
             LicenseSheet(text: About.license ?? "")
+        }
+        // The same shape as the main window's blocked-device confirmation: a confirmationDialog
+        // with a destructive role, not an alert. app-ui.md: warn and confirm, do not act quietly.
+        .confirmationDialog(Copy.removeMicpegTitle,
+                            isPresented: $confirmingRemoval,
+                            titleVisibility: .visible) {
+            Button(Copy.removeMicpegConfirm, role: .destructive) {
+                removing = true
+                Task {
+                    removeFailure = await onRemove()
+                    // Only reached when something was left behind: a removal that worked has
+                    // already terminated the app.
+                    removing = false
+                }
+            }
+            Button(Copy.cancel, role: .cancel) {}
+        } message: {
+            Text(Copy.removeMicpegBody)
+        }
+    }
+
+    // MARK: - Removing Micpeg
+
+    private var removeSection: some View {
+        Section {
+            LabeledContent(Copy.removeMicpegLabel) {
+                Button(Copy.removeMicpegButton) { confirmingRemoval = true }
+                    .disabled(removing)
+            }
+        } footer: {
+            if let removeFailure {
+                Text(removeFailure)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                Text(Copy.removeMicpegFooter)
+            }
         }
     }
 
@@ -197,5 +244,5 @@ struct LicenseSheet: View {
 // MARK: - Previews
 
 #Preview("Settings") {
-    SettingsWindow(onReopen: { nil })
+    SettingsWindow(onReopen: { nil }, onRemove: { nil })
 }

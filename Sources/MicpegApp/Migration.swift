@@ -337,6 +337,14 @@ enum Migration {
     }
 
     // MARK: - The CLI symlink, offered rather than taken
+    //
+    // Offered in the transcript of `MicpegApp link` and in docs/cli.md, and deliberately **not**
+    // in any window. Micpeg is distributed as an app to people who do not open a terminal, and an
+    // "Advanced" row that puts a command-line tool on a PATH they do not have is a question asked
+    // of the wrong audience — app-ui.md argues for one Settings pane on the HIG's own words, and
+    // this is the section that would start the second one. Anyone who wants it has a terminal
+    // already and one line to paste. `linkCLI()` therefore has exactly one caller, Headless.swift;
+    // that is not an oversight, and wiring it to a button would undo the decision.
 
     private static func cliAdvice(_ survey: InstallSurvey) -> [String] {
         guard survey.cli.isLegacyCopy else { return [] }

@@ -126,6 +126,21 @@ absent "nothing shipped invokes sfltool" \
        "sfltool" \
        Sources/micpeg Sources/MicpegApp Sources/MicpegUI Sources/MicpegAudio
 
+# Nothing micpeg ships opens a network connection. README spends four bullets on what the agent
+# does not do with the microphone, and the same argument is worth nothing from a process that also
+# talks to a server on a schedule. The decision this enforces is in docs/app-design.md: there is no
+# built-in update check, because a version number is not worth an outbound connection from a
+# process that holds a microphone grant. Without a check, "Micpeg never connects to anything" is a
+# sentence in a README; with one, it is a property — the same move already made for
+# DefaultOutputDevice and AVF.
+#
+# Not `http`: Sources/MicpegUI/SettingsWindow.swift holds a https:// URL it hands to
+# NSWorkspace.open, and that connection is the browser's. Opening a link is not reaching out.
+for api in URLSession NSURLConnection NWConnection 'Network\.' CFSocket CFStream getaddrinfo; do
+    absent "nothing shipped opens a network connection ($(printf '%s' "$api" | tr -d '\\'))" "$api" \
+           Sources/micpeg Sources/MicpegAudio Sources/MicpegApp Sources/MicpegUI
+done
+
 # The app reads config.json — app-ui.md's "unconfigured" state is defined by an empty priority
 # list, and state.json cannot answer it: an unset target and a target that is merely unplugged
 # both read as "(absent)". Reading it is fine. Writing it is not, and the first draft of this
@@ -193,11 +208,33 @@ for store in UserDefaults AppStorage SceneStorage CFPreferences; do
             Sources/MicpegApp Sources/MicpegUI
 done
 
-# The one file the app deletes: the legacy plist, during migration (Migration.swift, and
-# app-design.md's migration flow). Anywhere else, a deletion is a bug.
-only_in "only Migration.swift deletes a file" \
-        'Sources/MicpegApp/Migration\.swift' "removeItem" \
+# The app deletes files in exactly two operations, and both are the point of the file they live in.
+#
+# Migration.swift removes the legacy LaunchAgent plist — stage 3's whole purpose, and not
+# optional: §8 measured a plist left on disk switching a registration back on within a second.
+#
+# Uninstall.swift removes what a removal has to remove, because dragging the app to the Trash does
+# not: §3 and §28 measured the daemon surviving on its inode, the launchd job surviving as
+# unspawnable, and the Background Task Management record and its Login Items entry surviving the
+# Trash entirely. Only SMAppService.unregister() clears that record, so only the app can do it,
+# which is why this could not be a `micpeg` subcommand — the daemon's import allowlist above means
+# the CLI can never call ServiceManagement.
+#
+# Anywhere else, a deletion is a bug. And widening this list by moving code into Migration.swift
+# to satisfy the letter would leave this comment describing something that is not true, which is
+# the failure this whole script was written against.
+only_in "only Migration.swift and Uninstall.swift delete a file" \
+        'Sources/MicpegApp/(Migration|Uninstall)\.swift' "removeItem" \
         Sources/MicpegApp Sources/MicpegUI
+
+# `Data(contentsOf:)` cannot be forbidden — it is how config.json, state.json and the legacy plist
+# are read, in five places. What can be held down is where a URL with a *scheme* is written at all:
+# the two files that hand one to NSWorkspace, which opens it in the browser or in System Settings.
+# A third file constructing one would be something reaching out on its own.
+addressable='Sources/MicpegUI/SettingsWindow\.swift|Sources/MicpegUI/SystemSettings\.swift'
+only_in "only SettingsWindow.swift and SystemSettings.swift construct a URL from a string" \
+        "$addressable" 'URL(string:' \
+        Sources/micpeg Sources/MicpegAudio Sources/MicpegApp Sources/MicpegUI
 
 # The bundle templates carry two mistakes that assemble and sign without complaint.
 #

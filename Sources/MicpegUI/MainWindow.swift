@@ -62,29 +62,15 @@ public struct MainWindow: View {
 
     public var body: some View {
         Form {
-            if let banner = model.banner {
-                Section { BannerRow(banner: banner, act: handle) }
-            }
-            if let errorMessage {
-                // Not a Banner. Assembling one with an empty body and a no-op action, purely
-                // to reuse BannerRow, is what put an `if !body.isEmpty` branch inside
-                // BannerRow and made every reader check whether a button could appear here.
-                Section {
-                    Label(errorMessage, systemImage: "exclamationmark.triangle")
-                        .foregroundStyle(.orange)
-                }
-            }
-
-            // Nothing until the files and devices have been read once: `model.body` starts at
-            // unconfigured, and the first frame used to be onboarding for someone who had chosen
-            // a microphone long before.
-            if model.hasLoaded {
-                switch model.body {
-                case .unconfigured: unconfigured
-                // Same body: the rows and the meter describe the machine as it is, which is true
-                // whatever the file says. The banner says what is wrong with the file.
-                case .configured, .settingsUnreadable: configured
-                }
+            // Before everything, and instead of everything. Nothing in `running` can be acted on
+            // from a disk image: choosing a microphone would write a config for a helper this
+            // copy can never register. app-ui.md, "One window, several states" — a state rather
+            // than an alert, because an alert is dismissible and a dismissed alert leaves the
+            // user pressing Keep from the same place.
+            if model.cannotRunHere {
+                cannotRunHere
+            } else {
+                running
             }
         }
         .formStyle(.grouped)
@@ -131,6 +117,55 @@ public struct MainWindow: View {
         }
     }
 
+    /// Everything the window says when it is installed somewhere it can work from.
+    @ViewBuilder
+    private var running: some View {
+        if let banner = model.banner {
+            Section { BannerRow(banner: banner, act: handle) }
+        }
+        if let errorMessage {
+            // Not a Banner. Assembling one with an empty body and a no-op action, purely
+            // to reuse BannerRow, is what put an `if !body.isEmpty` branch inside
+            // BannerRow and made every reader check whether a button could appear here.
+            Section {
+                Label(errorMessage, systemImage: "exclamationmark.triangle")
+                    .foregroundStyle(.orange)
+            }
+        }
+
+        // Nothing until the files and devices have been read once: `model.body` starts at
+        // unconfigured, and the first frame used to be onboarding for someone who had chosen
+        // a microphone long before.
+        if model.hasLoaded {
+            switch model.body {
+            case .unconfigured: unconfigured
+            // Same body: the rows and the meter describe the machine as it is, which is true
+            // whatever the file says. The banner says what is wrong with the file.
+            case .configured, .settingsUnreadable: configured
+            }
+        }
+    }
+
+    // MARK: - Can't run from here
+
+    @ViewBuilder
+    private var cannotRunHere: some View {
+        Section {
+            Label {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(Copy.cannotRunHereTitle).fontWeight(.medium)
+                    Text(Copy.cannotRunHereBody)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            } icon: {
+                Image(systemName: "arrow.down.app")
+                    .foregroundStyle(.orange)
+                    .accessibilityHidden(true)
+            }
+        }
+    }
+
     // MARK: - Unconfigured
 
     @ViewBuilder
@@ -139,22 +174,46 @@ public struct MainWindow: View {
             Text(Copy.onboardingHeadline)
             Text(Copy.onboardingInstruction)
                 .foregroundStyle(.secondary)
+            Text(Copy.onboardingPromise)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
         Section {
-            DeviceList(model: model, selection: $pendingChoice)
-                // Seed the selection once rather than teaching the list a second rule about
-                // what nil means. The sheet's Done button reads nil as "nothing chosen" and
-                // disables itself; a list that also drew the current input as selected while
-                // the binding was nil made the two disagree.
-                //
-                // Seeded from `suggestedChoice`, not the current input: on a fresh install that
-                // is often the headset macOS has just moved it to.
-                .task { pendingChoice = pendingChoice ?? model.suggestedChoice?.uid }
+            // Up to `longInputList` devices this is exactly the section verification.md §25
+            // measured: plain Form rows, the window sized to them by `.fixedSize` below.
+            //
+            // Past it the list scrolls inside a cap, because `.scrollDisabled(true)` plus
+            // `.fixedSize` means the window follows its content until the content is taller than
+            // the screen, and then the content is *clipped* rather than scrolled. The row that
+            // goes off the bottom is the Keep button — and §22 measured that a button off the
+            // bottom edge is still in the accessibility tree, so nothing automated notices. Ten
+            // inputs is not exotic: an aggregate device, a multi-channel interface, Continuity
+            // Mic and a webcam get there.
+            //
+            // A `List` rather than a `ScrollView` because DevicePicker below already scrolls
+            // these same rows that way.
+            if model.inputs.count > longInputList {
+                List { DeviceList(model: model, selection: $pendingChoice) }
+                    .listStyle(.inset)
+                    .frame(height: longInputListHeight)
+            } else {
+                DeviceList(model: model, selection: $pendingChoice)
+            }
         } footer: {
             Text(Copy.deviceListFooter)
         }
+        // Seed the selection once rather than teaching the list a second rule about what nil
+        // means. The sheet's Done button reads nil as "nothing chosen" and disables itself; a
+        // list that also drew the current input as selected while the binding was nil made the
+        // two disagree.
+        //
+        // On the Section rather than on the list, so it survives the branch above.
+        //
+        // Seeded from `suggestedChoice`, not the current input: on a fresh install that is often
+        // the headset macOS has just moved it to.
+        .task { pendingChoice = pendingChoice ?? model.suggestedChoice?.uid }
         Section {
-            Button(Copy.keepButton(pendingChoiceName)) {
+            Button(keepButtonTitle) {
                 guard let device = pendingDevice else { return }
                 if model.isBlocked(device) {
                     blockedChoice = device
@@ -172,13 +231,22 @@ public struct MainWindow: View {
         }
     }
 
+    /// Where the unconfigured list stops growing the window and starts scrolling. Not measured —
+    /// verification.md §25 measured the configured window and said so. Six is chosen to leave the
+    /// common case untouched; §29 is where the long case gets looked at on a real screen.
+    private let longInputList = 6
+    private let longInputListHeight: CGFloat = 200
+
     @State private var pendingChoice: String?
     @State private var blockedChoice: AudioDevice?
 
     private var pendingDevice: AudioDevice? {
         model.inputs.first { $0.uid != nil && $0.uid == pendingChoice }
     }
-    private var pendingChoiceName: String { pendingDevice?.name ?? Copy.noDevice }
+    /// "Keep None" is not a sentence anyone means. See Copy.keepButtonNoChoice.
+    private var keepButtonTitle: String {
+        pendingDevice.map { Copy.keepButton($0.name) } ?? Copy.keepButtonNoChoice
+    }
 
     /// The first choice, written through the CLI; then the app target is asked to register the
     /// agent that will keep it.
@@ -218,6 +286,15 @@ public struct MainWindow: View {
             LevelMeter(test: test)
             Button(test.isRunning ? Copy.stopTest : Copy.startTest) {
                 test.isRunning ? test.stop() : test.start()
+            }
+            // Only for the failure that has somewhere to go. A row rather than something in the
+            // footer below, because a footer is explanation and this is an action — and the
+            // needs-approval banner has taken the user to Login Items with a button since
+            // stage 3, while this message named a pane and left them to find it.
+            if test.failureIsPermission {
+                Button(Copy.openMicrophoneSettings) {
+                    SystemSettings.openMicrophonePrivacy()
+                }
             }
         } footer: {
             if test.isRunning, test.isSilent {

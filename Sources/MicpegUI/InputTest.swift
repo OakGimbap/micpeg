@@ -62,6 +62,11 @@ public final class InputTest {
     public private(set) var levels = [Float](repeating: 0, count: InputTest.slots)
     public private(set) var isSilent = false
     public private(set) var failure: String?
+    /// Whether `failure` is the one the user can do something about. The other failures — no input
+    /// channels, an engine that would not open — name a condition, and there is no pane to send
+    /// anyone to; this one has a destination, and app-ui.md says a message with a destination
+    /// should carry the button that goes there.
+    public private(set) var failureIsPermission = false
 
     /// One variable for the lifecycle. It was three booleans — running, starting, and whether
     /// a stop had arrived while starting — kept in step by hand at five sites, and the double
@@ -102,6 +107,7 @@ public final class InputTest {
         guard phase == .idle else { return }
         phase = .awaitingPermission
         failure = nil
+        failureIsPermission = false
         // app-ui.md: request permission when the user starts a test, never at launch. A
         // permission prompt during onboarding, for a capability not yet in use, costs installs.
         AVAudioApplication.requestRecordPermission { [weak self] granted in
@@ -117,6 +123,7 @@ public final class InputTest {
                 guard granted else {
                     self.phase = .idle
                     self.failure = Copy.microphonePermissionDenied
+                    self.failureIsPermission = true
                     return
                 }
                 self.reallyStart()

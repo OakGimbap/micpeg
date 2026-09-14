@@ -76,7 +76,7 @@ struct MicpegSettingsApp: App {
         // ⌘,. For this scene SwiftUI enables the Settings… item in the app menu (Apple's
         // `Settings` documentation). SettingsWindow.swift says what is in it, and why one pane.
         Settings {
-            SettingsWindow(onReopen: reopen)
+            SettingsWindow(onReopen: reopen, onRemove: remove)
         }
     }
 
@@ -96,6 +96,18 @@ struct MicpegSettingsApp: App {
     /// decision to make in onboarding.
     @MainActor
     private func reconcile() async {
+        // First, and it returns. A translocated copy — one opened from the mounted DMG instead of
+        // being dragged to Applications — has no recorded bundle path of its own, so it reads as
+        // `.moved` and the automatic repair below would hand the label to a bundle that ceases to
+        // exist when the image is ejected, taking it from whichever copy legitimately holds it.
+        // The early return is the guard; a flag that only changed what the window drew would not
+        // be one. InstallLocation.swift says what is tested and why it is the symptom.
+        if InstallLocation.isUnusable() {
+            AgentController.report(InstallLocation.describe(), label: "cannot run from here")
+            model.setCannotRunHere(true)
+            return
+        }
+
         // Off the main actor: this forks `launchctl print` and waits for it, then makes two
         // synchronous ServiceManagement round trips to backgroundtaskmanagementd. On the main
         // thread that is the window's first frame blocked for as long as btmd takes.
@@ -206,6 +218,26 @@ struct MicpegSettingsApp: App {
     private func condition(after outcome: Migration.Outcome) -> AppModel.AgentCondition {
         let condition = condition(for: outcome.survey)
         return !outcome.ok && condition == .healthy ? .notKeeping : condition
+    }
+
+    // MARK: - Removing Micpeg
+
+    /// Tear the installation down, then leave. Returns a sentence for the Settings window only
+    /// when something survived — a removal that worked has already quit the app, so there is no
+    /// window left to show a success in, which is the right ending for this particular button.
+    ///
+    /// Uninstall.swift says why this cannot be a `micpeg` subcommand and what the order is.
+    @MainActor
+    private func remove() async -> String? {
+        let outcome = await Task.detached(priority: .userInitiated) { Uninstall.run() }.value
+        AgentController.report(outcome, label: "remove Micpeg")
+        guard outcome.ok else {
+            model.setAgent(condition(after: outcome))
+            model.reloadAll()
+            return Copy.removeFailed
+        }
+        Uninstall.revealAndQuit()
+        return nil
     }
 
     // MARK: - Language

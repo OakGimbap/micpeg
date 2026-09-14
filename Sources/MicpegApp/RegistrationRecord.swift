@@ -47,4 +47,16 @@ enum RegistrationRecord {
         UserDefaults.standard.set(bundle.path, forKey: pathKey)
         UserDefaults.standard.set(Date(), forKey: dateKey)
     }
+
+    /// Forget it, as part of removing Micpeg (Uninstall.swift).
+    ///
+    /// The two keys by name rather than `removePersistentDomain(forName:)`: that call is
+    /// documented as unreliable against the running application's own domain, and it would also
+    /// be a third thing in this file that scripts/invariants.sh has to excuse. Removing what was
+    /// set leaves the domain holding no micpeg values, which is the whole requirement — the other
+    /// value, AppleLanguages, belongs to AppLanguage.swift and is cleared there.
+    static func clear() {
+        UserDefaults.standard.removeObject(forKey: pathKey)
+        UserDefaults.standard.removeObject(forKey: dateKey)
+    }
 }

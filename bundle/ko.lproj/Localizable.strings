@@ -16,9 +16,24 @@
 /* Onboarding */
 "When a Bluetooth headset connects, macOS moves your microphone to it." = "블루투스 헤드셋을 연결하면 macOS가 마이크를 그쪽으로 옮깁니다.";
 "Choose the microphone to keep." = "유지할 마이크를 선택하세요.";
+"It stays selected from then on, including after you disconnect the headset." = "그 뒤로는 헤드셋 연결을 끊은 다음에도 계속 선택된 상태로 유지됩니다.";
 "Don't see it? Connect it and it will appear here." = "목록에 없나요? 연결하면 여기에 나타납니다.";
 "Keep %@" = "%@ 유지";
+"Keep Microphone" = "마이크 유지";
 "Enabling adds a background helper. macOS will tell you that a login item was added." = "선택하면 백그라운드 도우미가 추가되고, macOS가 로그인 항목이 추가되었다고 알려 줍니다.";
+
+/* Removing Micpeg */
+"Remove Micpeg" = "Micpeg 제거";
+"Remove…" = "제거…";
+"Remove Micpeg?" = "Micpeg을 제거할까요?";
+"This turns off the background helper, removes the login item, and deletes Micpeg's settings and its log. Micpeg then quits and shows itself in the Finder, so you can move it to the Trash." = "백그라운드 도우미를 끄고 로그인 항목을 제거하며 Micpeg의 설정과 로그를 삭제합니다. 그런 다음 Micpeg이 종료되고 Finder에서 자신의 위치를 보여 주므로 휴지통으로 옮기면 됩니다.";
+"Remove" = "제거";
+"Your microphone choice in System Settings is not changed." = "시스템 설정에서 선택한 마이크는 바뀌지 않습니다.";
+"Micpeg couldn't remove everything. Its background helper may still be set up." = "Micpeg이 전부 제거하지 못했습니다. 백그라운드 도우미가 아직 설정되어 있을 수 있습니다.";
+
+/* Install location */
+"Micpeg needs to be in your Applications folder" = "Micpeg은 응용 프로그램 폴더에 있어야 합니다";
+"It's running from a location it can't be installed from. Quit Micpeg, move it to the Applications folder, and open it from there." = "지금은 설치할 수 없는 위치에서 실행되고 있습니다. Micpeg을 종료하고 응용 프로그램 폴더로 옮긴 다음 거기에서 여세요.";
 
 /* Rows */
 "Output" = "출력";
@@ -116,7 +131,8 @@
 "Couldn't read its settings and is using the last ones that worked." = "설정을 읽지 못해서 마지막으로 작동한 설정을 사용하고 있습니다.";
 
 /* Failures the window has to surface */
-"Micpeg needs permission to use the microphone. Allow it in System Settings > Privacy & Security > Microphone." = "Micpeg이 마이크를 쓰려면 권한이 필요합니다. 시스템 설정 > 개인정보 보호 및 보안 > 마이크에서 허용하세요.";
+"Micpeg needs permission to use the microphone." = "Micpeg이 마이크를 쓰려면 권한이 필요합니다.";
+"Open Microphone Settings" = "마이크 설정 열기";
 "This microphone isn't providing any audio channels right now." = "이 마이크는 지금 오디오 채널을 제공하지 않습니다.";
 "The microphone could not be opened: %@" = "마이크를 열 수 없습니다: %@";
 "That device has no identifier to pin." = "그 장치에는 고정할 식별자가 없습니다.";

@@ -59,6 +59,17 @@ enum AgentController {
     /// What a migration or repair actually did. The window shows a one-line verdict; this is
     /// the evidence behind it, and why it goes to the unified log is above. One entry a line,
     /// and public: a transcript is paths and verdicts, and a redacted one is no evidence.
+    /// The same log, for a condition that is not the outcome of an operation — the one caller is
+    /// the install-location guard, which refuses before any operation starts and still has to
+    /// leave behind what it saw. The window cannot show it: app-ui.md keeps file paths out of it,
+    /// and a translocated path is a randomised one.
+    static func report(_ lines: String, label: String) {
+        log.notice("\(label, privacy: .public):")
+        for line in lines.split(separator: "\n", omittingEmptySubsequences: false) {
+            log.notice("  \(String(line), privacy: .public)")
+        }
+    }
+
     static func report(_ outcome: Migration.Outcome, label: String) {
         let verdict = outcome.ok ? "reached a healthy state" : "DID NOT reach a healthy state"
         log.notice("\(label, privacy: .public): \(verdict, privacy: .public)")
