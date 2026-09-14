@@ -152,6 +152,10 @@ struct InstallSurvey {
         /// present — the shape a moved or deleted bundle leaves behind. Or a daemon is running
         /// from here with no Background Task Management record behind it, which is the shape a
         /// Finder move leaves (§2): running now, and nothing will start it again.
+        ///
+        /// That second shape is defensive now. On macOS 26.6 no move produces it: a Finder drag
+        /// leaves the records alone, and launchd resolves the program against the bundle
+        /// identifier, so the moved bundle still spawns (§28). Kept for the OS §2 measured.
         case stale
         case requiresApproval
         case notRegistered
@@ -165,9 +169,10 @@ struct InstallSurvey {
             if running == bundledDaemon.resolvingSymlinksInPath() {
                 // This bundle's daemon, which is not health on its own. A shell `mv` carries the
                 // inode, so the process reports the new path while launchd holds the old one
-                // (§11), and the record catches that. A Finder move purges the Background Task
-                // Management records while the process runs on (§2), and `.notFound` then means
-                // nothing will start it again. `.enabled` is no evidence of health — it answered
+                // (§11), and the record catches that. A Finder move purged the Background
+                // Task Management records while the process ran on (§2) — not any more, and not
+                // on macOS 26.6 (§28) — and `.notFound` then means nothing will start it again.
+                // `.enabled` is no evidence of health — it answered
                 // for somebody else's agent (§1) — but anything else is evidence against it, and
                 // this said HEALTHY beside `SMAppService: notFound`.
                 if let from = movedFrom { return .moved(from: from) }

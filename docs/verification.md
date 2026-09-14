@@ -1667,3 +1667,210 @@ Afterwards the settings file was restored byte for byte and the input returned t
 unplugged on a Mac with no built-in microphone. The `working` and "won't start again" banners. And
 the registration scenarios: a Finder move, a move away and back, a second copy while the first
 runs, and a legacy install with and without its plist.
+
+Section 28 records which of these the registration scenarios have since answered.
+
+#### 28. What the registration scenarios answered
+
+2026-09-14, straight after §27, on macOS 26.6.2 (25G83), against the same installed copy. No
+microphone is involved in any of this: the daemon stayed paused throughout, `config.json` came back
+byte for byte at the end, and the machine finished HEALTHY on the registration it started with.
+
+**A second copy no longer takes the registration.** A `ditto` of the installed bundle into a
+scratch directory, surveyed from there:
+
+```
+launchd job:     present — gui/501/com.micpeg.agent
+  running from:  /Applications/Micpeg.app/Contents/MacOS/micpeg
+registered from: /Applications/Micpeg.app   — another copy, still installed there
+verdict:         FOREIGN BUNDLE
+```
+
+Opened with `open -n`, it left `registeredFromBundlePath` at `/Applications/Micpeg.app` and the
+daemon's pid unchanged, and said which copy was in charge:
+
+```
+StaticText «Another copy of Micpeg is doing this»
+StaticText «The copy at /Applications/Micpeg.app set up the background helper and it's running.
+            Use that one, or delete it and reopen this one.»
+```
+
+No repair button on that banner, which is the whole point — repairing from a scratch directory is
+what the old code did unasked. This is the case that read MOVED before.
+
+**`micpeg install` refuses from both directions.** Through the PATH symlink, which resolves into
+the bundle: *this copy of micpeg lives inside Micpeg.app*. From a standalone copy outside any
+bundle, while the app held the label: *the background agent on this Mac was registered by
+Micpeg.app*. Neither wrote a plist or touched the job.
+
+**A move is caught by the app's own record, and by nothing else.** `/Applications` → `~/Desktop`
+with a shell `mv`:
+
+```
+  running from:    ~/Desktop/Micpeg.app/Contents/MacOS/micpeg
+SMAppService:      enabled
+CLI on PATH:       symlink -> /Applications/… (DANGLING — nothing there)
+registered from:   /Applications/Micpeg.app   — NOT where this app is now
+verdict:           MOVED
+```
+
+`proc_pidpath` had already followed the inode, and ServiceManagement still said `enabled`, so every
+line but the record reads healthy — §11 on the current code. The same shape appeared moving back,
+with the paths exchanged.
+
+**The launch repair, and the `working` banner.** Opening the app from the new location, sampled in
+a loop with no sleep in it:
+
+```
+[+0s] StaticText «Setting up the background helper»
+      StaticText «This can take a few seconds.»
+[+1s] StaticText «Micpeg reconnected after being moved»
+      StaticText «Micpeg was moved from ~/Desktop/Micpeg.app. Its background helper has been
+                  reconnected.»
+```
+
+Under a second, both directions. The repair confirmed itself the way stage 3 asked: a new pid,
+running from this bundle, and `state.json` written *after* the registration call — `registered
+from: … at 14:01:00.919`, `state.json: 14:01:01.482`.
+
+**§2 does not reproduce on this macOS, in either half.** Both halves were retested deliberately,
+the second by hand because a scripted Finder move is not obviously the same thing as a drag.
+
+A Finder drag of `/Applications/Micpeg.app` to `~/Downloads` — §2's own destination — left both
+records in place. Polled for a minute afterwards, `SMAppService.status` never moved off `enabled`,
+and the daemon that was running before the drag was still running on the same pid.
+
+Then the other half. With the bundle still in `~/Downloads`, the daemon was killed to force a
+respawn, which is where §2 measured `EX_CONFIG` at 120 s and counting:
+
+```
+launchctl kill SIGKILL gui/501/com.micpeg.agent
+→ 8 s later:  state = running,  pid = 68987,  last exit code = (never exited)
+   running from: ~/Downloads/Micpeg.app/Contents/MacOS/micpeg
+```
+
+launchd started it, out of the moved bundle. `launchctl print` says why:
+
+```
+path = (submitted by smd.82331)
+program identifier = Contents/MacOS/micpeg (mode: 2)
+parent bundle identifier = com.micpeg.app
+properties = partial import | keepalive | runatload | resolve program | has LWCR
+```
+
+The program is held as a path *relative to a bundle identifier*, with `resolve program` set — not
+as the absolute path the registration was made at. So the bundle is found wherever it now is, which
+is exactly the relocation `SMAppService.h` promises and §2 recorded as not delivered. Moving it
+back to `/Applications` left the survey HEALTHY on the registration from 14:07:33, which had never
+actually broken.
+
+This does not make the app's `.moved` handling wrong — the app cannot see what launchd resolved,
+only that its own record names a bundle that is gone, and re-registering from the new path is
+cheap and correct either way. What it changes is the danger: a move is no longer a broken
+installation on this OS, and §2's "moving it back does not restore it" is not true here.
+
+**The orphan is therefore unreachable.** `.stale` with a live pid — the *won't start again* banner
+— exists because a Finder move was measured to purge the Background Task Management records while
+the daemon ran on. It needs ServiceManagement to report anything but `enabled` while this bundle's
+daemon runs *and* the record still names the current path. Nothing a user can do produces that
+combination here: `mv`, a Finder drag, and the Trash all leave the record alone, and all three make
+the recorded bundle gone, which routes to `.moved` before the stale branch is reached. The branch
+stays as defence against an OS that behaves as §2's did. The banner stays unobserved.
+
+**The other stale shape, which is reachable.** `KeepAlive` with `ThrottleInterval 60`: kill the
+daemon twice within three seconds and launchd defers the next spawn for a minute, leaving a job
+with no process behind it.
+
+```
+launchd job:  present — gui/501/com.micpeg.agent
+  pid:        none (nothing running)
+verdict:      STALE
+```
+
+```
+StaticText «The background helper isn't running»
+StaticText «Your microphone isn't being kept. Reconnecting usually fixes it.»
+Button «Reconnect»
+```
+
+`launchctl` called the job `spawn scheduled` at that moment, so in *this* shape the sentence is
+pessimistic — the helper would have come back on its own inside the minute. Pressing «Reconnect»
+went through the same `working` banner and returned HEALTHY on a new pid, confirmed again by a
+`state.json` later than the registration.
+
+**The legacy install, with its plist.** The label booted out by hand, then `micpeg install` run
+from a copy outside any bundle. What it writes points at `~/.local/bin/micpeg`, and the app has
+already linked that to itself:
+
+```
+legacy plist:    PRESENT — ~/Library/LaunchAgents/com.micpeg.agent.plist
+  its program:   ~/.local/bin/micpeg
+launchd job:     present — gui/501/com.micpeg.agent
+  running from:  /Applications/Micpeg.app/Contents/MacOS/micpeg
+  managed_by:    (absent — not an SMAppService job)
+SMAppService:    enabled
+verdict:         LEGACY PRESENT
+```
+
+A hand-written job running the bundle's own binary: the exact shape a check on the executable's
+path called the app's registration. `managed_by` is what tells them apart. And `SMAppService:
+enabled` sitting beside it is §1's lie, live — the API is answering for whoever holds the label.
+
+**The legacy install, without its plist.** Deleting the plist and leaving the job:
+
+```
+  statusForLegacyPlist: notRegistered
+launchd job:     present — managed_by: (absent — not an SMAppService job)
+verdict:         LEGACY PRESENT
+```
+
+The API says nothing is installed while a hand-written job holds the label — §7 again, from the
+other side. This is the shape that used to read as nothing running at all, and was offered a
+Reconnect that cannot move a label a hand-written job holds.
+
+The window said «An older installation is still set up» with a «Replace It» button. Pressing it
+went `working` → no banner, and the survey came back HEALTHY with `managed_by =
+com.apple.xpc.ServiceManagement` and the plist gone.
+
+**A plist that was never bootstrapped.** Written beside a healthy registration, with no `launchctl`
+at all, it flips the verdict by itself:
+
+```
+legacy plist:    PRESENT
+  statusForLegacyPlist: enabled
+launchd job:     present — managed_by: com.apple.xpc.ServiceManagement
+verdict:         LEGACY PRESENT
+```
+
+Nothing bootstrapped it, and the API still says `enabled` — about the app's own registration, which
+is §7's finding once more. Masking a healthy install is the cautious reading and the right one:
+that file loads at the next login, under a label the app already holds.
+
+**The bounded retry, exercised.** A target that resolves and has no input scope is the one way to
+reach `targetPendingInputScope()` on demand — the built-in speakers, `BuiltInSpeakerDevice`,
+written into `config.json` by hand:
+
+```
+14:10:38.377 target present but publishing no input scope yet; retry 1/5 in 1s
+14:10:39.479 target present but publishing no input scope yet; retry 2/5 in 1s
+14:10:40.582 target present but publishing no input scope yet; retry 3/5 in 1s
+14:10:41.684 target present but publishing no input scope yet; retry 4/5 in 1s
+14:10:42.784 target present but publishing no input scope yet; retry 5/5 in 1s
+14:10:43.885 PAUSED -> ABSENT: no configured input device present
+```
+
+Then twelve seconds of nothing in the log and 0:00.07 of CPU on the process altogether. Before the
+bound this was a one-second timer with no exit, which is principle 2 as much as it is a bug.
+`micpeg status` named the condition rather than the symptom: `MacBook Pro Speakers — no input
+scope`.
+
+**A refused revert still has not happened, and cannot be staged.** The obvious way to make
+CoreAudio refuse a default-input write is to aim the daemon at a device with no input — and that
+never reaches `revert()`, because `targetPendingInputScope()` catches it first, which is the run
+above. A device that does have an input scope takes the write. What is left is the device vanishing
+between the `'uidd'` resolution and the write: a race of microseconds no hand can hit.
+`REVERT FAILED` and `retryRevertOnce()` stay unexercised.
+
+**Still not observed.** The refused revert above. The only input unplugged on a Mac with no
+built-in microphone — this one has one. And the *won't start again* banner, whose verdict is no
+longer reachable on this macOS.
