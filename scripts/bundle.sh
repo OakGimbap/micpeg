@@ -4,12 +4,20 @@
 #   ./scripts/bundle.sh                     # universal (arm64 + x86_64)
 #   MICPEG_HOST_ARCH=1 ./scripts/bundle.sh  # this Mac's architecture only, for iteration
 #   MICPEG_SIGN_IDENTITY="Developer ID Application: …" ./scripts/bundle.sh
+#   MICPEG_RELEASE=1 ./scripts/bundle.sh    # refuse anything Gatekeeper would reject
+#   MICPEG_ADHOC=1 ./scripts/bundle.sh      # ad-hoc signature, for CI's structural checks
 #
 # Signing is not optional here. SMAppService.h, -registerAndReturnError:
 #   "If the app bundle is not properly code signed, this API will return error
 #    kSMErrorInvalidSignature"
 # Notarization is required for LaunchDaemons only, so an agent can be exercised with a
-# development certificate. Distribution needs Developer ID; that is stage 5.
+# development certificate. Distribution needs Developer ID, and this script stops at a signed
+# bundle: scripts/notarize.sh submits it and staples the ticket, scripts/dmg.sh packages it.
+#
+# MICPEG_ADHOC exists so CI can run everything below on every pull request. An ad-hoc signature
+# still carries --options runtime and --entitlements, so the structural checks, the entitlement
+# split and the hardened-runtime assertion all mean the same thing; only Gatekeeper's opinion
+# differs, and this script never asserts that anyway.
 #
 # Every check below prints what it looked at. scripts/invariants.sh exists because an
 # earlier check passed by searching a path that did not exist, and the same rule applies
@@ -50,6 +58,32 @@ cp bundle/com.micpeg.agent.plist "$CONTENTS/Library/LaunchAgents/com.micpeg.agen
 # terms ask to travel with every copy.
 cp -R bundle/*.lproj "$CONTENTS/Resources/"
 cp LICENSE "$CONTENTS/Resources/LICENSE"
+
+# The icon. Compiled here rather than committed as an .icns: iconutil rejects a member that is
+# misnamed or the wrong size, whereas a hand-assembled .icns missing its 1024px member assembles
+# without complaint and ships a blurry Dock icon. docs/app-ui.md, "App icon": do not ship without
+# one — so a release build fails where a development build only says so.
+ICONSET="bundle/AppIcon.iconset"
+if [ -d "$ICONSET" ]; then
+    iconutil -c icns -o "$CONTENTS/Resources/AppIcon.icns" "$ICONSET"
+    named=$(plutil -extract CFBundleIconFile raw -o - "$CONTENTS/Info.plist" 2>/dev/null || echo "")
+    [ "$named" = "AppIcon" ] || {
+        echo "error: Info.plist's CFBundleIconFile is '${named:-(absent)}', not 'AppIcon';" >&2
+        echo "       Finder would look for a file that is not there." >&2
+        exit 1; }
+    # The largest member is the one a Retina Dock and Get Info actually draw, and it is the one
+    # that is silently wrong if the iconset was assembled by hand.
+    px=$(sips -g pixelHeight "$ICONSET/icon_512x512@2x.png" | awk '/pixelHeight/{print $2}')
+    [ "$px" = "1024" ] || {
+        echo "error: $ICONSET/icon_512x512@2x.png is ${px}px tall, not 1024." >&2
+        exit 1; }
+    echo "ok:   Resources/AppIcon.icns compiled from $ICONSET (largest member ${px}px)"
+elif [ -n "${MICPEG_RELEASE:-}" ]; then
+    echo "error: $ICONSET is missing. docs/app-ui.md: do not ship without an icon." >&2
+    exit 1
+else
+    echo "note: no $ICONSET — this build will show the generic application icon."
+fi
 
 # The collision guard. An earlier draft of docs/app-design.md put the app at
 # Contents/MacOS/Micpeg next to the daemon at Contents/MacOS/micpeg; on a case-insensitive
@@ -114,7 +148,26 @@ echo "ok:   Resources holds LICENSE and a table for each of: ${tabled[*]} (devel
 
 # ---------------------------------------------------------------- sign
 
-if [ -z "${MICPEG_SIGN_IDENTITY:-}" ]; then
+if [ -n "${MICPEG_ADHOC:-}" ] && [ -n "${MICPEG_RELEASE:-}" ]; then
+    echo "error: MICPEG_ADHOC and MICPEG_RELEASE are exclusive." >&2
+    exit 1
+fi
+
+if [ -n "${MICPEG_ADHOC:-}" ]; then
+    # "-" is codesign's ad-hoc identity: a real signature with no certificate behind it. Enough
+    # for every check below, not enough for SMAppService to register the agent.
+    MICPEG_SIGN_IDENTITY="-"
+    MICPEG_NO_TIMESTAMP=1
+elif [ -n "${MICPEG_RELEASE:-}" ]; then
+    # The "exactly one, or name it" rule lives in one place, because scripts/dmg.sh has to sign
+    # with the same certificate this does.
+    MICPEG_SIGN_IDENTITY=$(./scripts/signing-identity.sh)
+    if [ -n "${MICPEG_NO_TIMESTAMP:-}" ]; then
+        echo "error: MICPEG_NO_TIMESTAMP with MICPEG_RELEASE. The notary service rejects a" >&2
+        echo "       signature with no secure timestamp, three minutes into the submission." >&2
+        exit 1
+    fi
+elif [ -z "${MICPEG_SIGN_IDENTITY:-}" ]; then
     MICPEG_SIGN_IDENTITY=$(security find-identity -v -p codesigning | awk -F'"' '/"/ {print $2; exit}')
 fi
 [ -n "$MICPEG_SIGN_IDENTITY" ] || {
@@ -125,6 +178,8 @@ fi
 echo "signing identity: $MICPEG_SIGN_IDENTITY"
 case "$MICPEG_SIGN_IDENTITY" in
     "Developer ID Application"*) ;;
+    "-") echo "note: ad-hoc signature. Every check below still applies; SMAppService will not"
+         echo "      register an agent from this bundle." ;;
     *) echo "note: this is not a Developer ID certificate. Good enough to register and run"
        echo "      an agent locally; Gatekeeper will reject the bundle if it is distributed." ;;
 esac
@@ -171,6 +226,34 @@ case "$cli_ents" in
         echo "ok:   the daemon carries no audio-input entitlement" ;;
 esac
 
+# get-task-allow is never in bundle/Micpeg.entitlements, and it arrives anyway the moment anyone
+# signs a debug build or an Xcode-managed profile joins in. It is the most common notarization
+# rejection there is, and its symptom is a failure three minutes into a submission rather than
+# here, two seconds in and offline. It also leaves the shipped app attachable by a debugger.
+for ents in "$app_ents" "$cli_ents"; do
+    case "$ents" in
+        *get-task-allow*)
+            echo "error: com.apple.security.get-task-allow is present. The notary service will" >&2
+            echo "       refuse this, and a build that carries it is debuggable by anything." >&2
+            exit 1 ;;
+    esac
+done
+echo "ok:   neither executable carries com.apple.security.get-task-allow"
+
+# The hardened runtime is a signature flag, not an entitlement, so neither check above can see it
+# — and without it the notary service refuses the submission and the audio-input entitlement above
+# means nothing.
+for exe in "$APP" "$CONTENTS/MacOS/micpeg"; do
+    # ${exe#$APP/} strips nothing when exe is the bundle itself, so name it outright.
+    [ "$exe" = "$APP" ] && label="Micpeg.app" || label="${exe#$APP/}"
+    if codesign -d --verbose=2 "$exe" 2>&1 | grep -q 'flags=.*runtime'; then
+        echo "ok:   $label is signed with the hardened runtime"
+    else
+        echo "error: $label is not signed with the hardened runtime." >&2
+        exit 1
+    fi
+done
+
 echo
 echo "--- architectures and deployment target ---"
 for exe in "$CONTENTS/MacOS/MicpegApp" "$CONTENTS/MacOS/micpeg"; do
@@ -180,9 +263,10 @@ otool -l "$CONTENTS/MacOS/micpeg" | grep -A3 LC_BUILD_VERSION | grep -E "minos|s
 
 echo
 echo "--- spctl (informational) ---"
-# Expected to fail with a development certificate: Gatekeeper wants Developer ID plus
-# notarization. Reported rather than asserted, because a pass here is a stage 5 concern and
-# a silent skip would be the wrong habit.
+# Expected to fail here even for a correct release build: Gatekeeper wants Developer ID *plus* a
+# notarization ticket, and nothing has been submitted yet. Reported rather than asserted, because
+# the assertion belongs after stapling — scripts/notarize.sh runs it there — and a silent skip
+# would be the wrong habit.
 spctl --assess --type execute -vv "$APP" 2>&1 || true
 
 echo

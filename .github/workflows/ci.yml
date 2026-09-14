@@ -11,42 +11,11 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      # CLAUDE.md's code-style rule — mark every SwiftUI view @MainActor — exists because the
-      # macOS 14 SDK isolates only a view's `body` to the main actor, so CI catches isolation
-      # errors a current local toolchain accepts without a warning. That only holds while CI
-      # really does build against the macOS 14 SDK, and the runner image's default Xcode drifts.
-      # Select by SDK rather than by Xcode version, so an image refresh that drops one point
-      # release fails over instead of silently moving CI onto a newer SDK.
+      # Selecting the toolchain is a script, not inline YAML: release.yml must pin the *same*
+      # SDK, and two inline copies drift. scripts/pin-xcode.sh says why the pin exists and
+      # asserts the SDK it actually landed on.
       - name: Pin Xcode to the macOS 14 SDK
-        run: |
-          pick=""
-          for app in /Applications/Xcode_15.3.app /Applications/Xcode*.app; do
-            [ -d "$app" ] || continue
-            sdk="$(DEVELOPER_DIR="$app/Contents/Developer" xcrun --sdk macosx --show-sdk-version 2>/dev/null || true)"
-            case "$sdk" in
-              14.*) pick="$app"; echo "selected $app (macOS SDK $sdk)"; break ;;
-            esac
-          done
-          if [ -z "$pick" ]; then
-            echo "::error::no installed Xcode ships the macOS 14 SDK any more. CI is the only"
-            echo "::error::place that SDK is exercised — pick a replacement and update CLAUDE.md."
-            ls -d /Applications/Xcode*.app
-            exit 1
-          fi
-          sudo xcode-select -s "$pick"
-
-      # Printing a toolchain is not the same as having one. Assert the SDK, because that is what
-      # the isolation rule above actually depends on.
-      - name: Show toolchain
-        run: |
-          swift --version
-          xcodebuild -version
-          SDK="$(xcrun --sdk macosx --show-sdk-version)"
-          echo "macOS SDK: $SDK"
-          case "$SDK" in
-            14.*) ;;
-            *) echo "::error::expected the macOS 14 SDK, got $SDK"; exit 1 ;;
-          esac
+        run: ./scripts/pin-xcode.sh --select
 
       - name: Build (release)
         run: swift build -c release
@@ -74,3 +43,12 @@ jobs:
       # contributor can run the same check before pushing — see CONTRIBUTING.md.
       - name: No device identifiers committed
         run: ./scripts/id-check.sh
+
+      # Assembling the bundle checks five things nothing else does: the MacOS directory holds two
+      # files that differ by more than case, BundleProgram resolves to an executable inside the
+      # bundle, every .strings table parses, Info.plist's CFBundleLocalizations and the .lproj
+      # directories agree, and the icon exists and is the size it claims. All five used to be
+      # "the maintainer ran bundle.sh locally". An ad-hoc signature still carries the hardened
+      # runtime and the entitlements, so the entitlement split is asserted here too.
+      - name: Assemble the bundle (ad-hoc signature)
+        run: MICPEG_ADHOC=1 ./scripts/bundle.sh

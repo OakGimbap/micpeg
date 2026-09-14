@@ -1198,6 +1198,26 @@ func cmdPick(_ requestedUID: String?) {
     nudgeDaemon()
 }
 
+/// Print the version, and be honest about the two shapes this binary ships in.
+///
+/// Inside `Micpeg.app/Contents/MacOS/micpeg`, `Bundle.main` resolves to the enclosing app bundle,
+/// so the CLI reports the app's own CFBundleShortVersionString with no build-time plumbing at all.
+/// A source build installed at ~/.local/bin/micpeg has no Info.plist and no honest answer;
+/// inventing one — a constant edited by hand, a version injected through unsafeFlags — would be
+/// exactly the kind of number that is right until the day it is quietly wrong.
+///
+/// Not folded into `micpeg status`: .github/ISSUE_TEMPLATE quotes that output, and bug reports
+/// paste it. A separate word is the greppable answer, and it breaks nothing.
+func cmdVersion() {
+    let info = Bundle.main.infoDictionary
+    if let short = info?["CFBundleShortVersionString"] as? String {
+        let build = info?["CFBundleVersion"] as? String
+        print("micpeg \(short)\(build.map { " (\($0))" } ?? "")")
+    } else {
+        print("micpeg (source build \u{2014} no bundle version)")
+    }
+}
+
 /// Put `micpeg` on the user's PATH, pointing at this binary. Invoked by the app;
 /// optional for the user.
 ///
@@ -1415,6 +1435,7 @@ func usage() {
       install     write config + LaunchAgent and bootstrap the daemon
       uninstall   bootout the daemon and remove its LaunchAgent
       daemon      run in the foreground (used by launchd)
+      version     print the version of this build
     """)
 }
 
@@ -1430,6 +1451,7 @@ case "off":       cmdEnable(false)
 case "link":      cmdLink(force: CommandLine.arguments.dropFirst(2).contains("--force"))
 case "install":   cmdInstall()
 case "uninstall": cmdUninstall()
+case "version", "--version", "-v": cmdVersion()
 case nil:         cmdStatus()
 case let other:
     print("unknown command: \(other ?? "")")

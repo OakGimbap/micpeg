@@ -12,8 +12,13 @@
     <key>CFBundleIdentifier</key>            <string>com.micpeg.app</string>
     <key>CFBundleName</key>                  <string>Micpeg</string>
     <key>CFBundlePackageType</key>           <string>APPL</string>
-    <key>CFBundleShortVersionString</key>    <string>0.1.0</string>
-    <key>CFBundleVersion</key>               <string>1</string>
+    <!-- The only place a version number lives. Sources/MicpegUI/SettingsWindow.swift reads it
+         back through Bundle.main for the About row, scripts/version.sh reads it for the DMG
+         name and the release tag, and the release workflow refuses a tag that is not
+         v + CFBundleShortVersionString. A second store means a release where the About box
+         and the download disagree. -->
+    <key>CFBundleShortVersionString</key>    <string>0.9.0</string>
+    <key>CFBundleVersion</key>               <string>2</string>
     <key>CFBundleInfoDictionaryVersion</key> <string>6.0</string>
 
     <!-- The language Sources/MicpegUI/Strings.swift is written in, and the languages that ship.
@@ -31,6 +36,13 @@
     <!-- docs/app-design.md, "Deployment target": @Observable is macOS 14. -->
     <key>LSMinimumSystemVersion</key>        <string>14.0</string>
     <key>NSHighResolutionCapable</key>       <true/>
+
+    <!-- CFBundleIconFile names Resources/AppIcon.icns, which scripts/bundle.sh compiles from
+         bundle/AppIcon.iconset with iconutil. CFBundleIconName is deliberately absent: it names
+         an entry in a compiled asset catalog, there is no Assets.car and no Xcode project to
+         produce one, and setting it without a catalog leaves Finder unable to resolve the icon
+         at all. -->
+    <key>CFBundleIconFile</key>              <string>AppIcon</string>
 
     <!-- LSUIElement is deliberately absent: a Dock icon is wanted. The app is not a menu
          bar item, and closing its window must not look like it stopped the feature. -->
