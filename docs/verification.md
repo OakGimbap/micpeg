@@ -1525,3 +1525,145 @@ connected, and there was none.
   the build directory, and the survey alone could show the verdict without that risk.
 - Registration: a Finder move, a move away and back, a second copy while the first runs, and a
   legacy install with and without its plist.
+
+Section 27 records which of these the hardware has since answered.
+
+#### 27. What the hardware could answer
+
+2026-09-14, with the Elgato and the AirPods both to hand, against the copy already in
+`/Applications`. That copy was built six minutes before the commits it should contain, and after a
+fast-forward merge every source file carried the merge's mtime, so nothing in the tree could tell
+them apart; short Swift literals do not reach the string table either, which made a `strings` check
+report four of six fixes missing that were all present. `__TEXT,__text` compared byte for byte,
+both architectures and both executables, against a fresh universal build of the merged tree:
+identical. So the rest of this section is about the shipped binary, not a rebuild of it.
+
+**The yield survives a HAL reset.** Pinned to the Elgato, the built-in microphone then chosen by
+hand in System Settings, then `sudo killall coreaudiod`:
+
+```
+13:38:26.711 PINNED -> YIELDED: user chose MacBook Pro Microphone [bltn] — respecting
+13:38:53.456 EVENT srst — coreaudiod restarted; re-registering listeners
+13:38:53.456 listeners registered: dev# dIn  srst
+13:38:53.456 system churn window armed for 15s (HAL reset)
+13:38:58.524 EVENT dev# — full list rebuild (5 devices)
+13:38:58.529 ARRIVED Elgato Wave:1 [usb ] input
+13:38:58.530 EVENT dIn  — default input changed
+13:38:58.530 EVENT dIn  — default input changed
+```
+
+Not one transition, and `state.json`'s `updated` never left 13:38:26.712 — the daemon wrote
+nothing at all. The input stayed where the user had put it.
+
+The guard that earned its keep here is not the one the fix was written around. The empty list never
+came up: this rebuild arrived whole, five devices in 6 ms, as every rebuild in this log has. What
+would have ended the yield is the line above the `dIn` events — the *target* arriving. Without
+`!isRebuild`, `ARRIVED Elgato Wave:1` five seconds after a HAL reset reads as a replug, and the
+daemon takes the microphone back from a choice made 32 seconds earlier. It would have done that at
+every coreaudiod restart, and at every wake.
+
+**A genuine replug does end it**, three minutes later — same device, same event name, same daemon:
+
+```
+13:41:26.213 YIELDED -> PINNED: target device re-arrived
+13:41:26.231 REVERT -> Elgato Wave:1 (dev#, displacing MacBook Pro Microphone [bltn])
+13:41:26.646 JUDGED (dIn) Elgato Wave:1 — our own write 0.4s ago; swallowed
+13:41:31.579 JUDGED (post-revert settle) Elgato Wave:1 — already the target
+```
+
+The pair is the evidence, not either line alone. A rebuild and a replug deliver the same `ARRIVED`
+for the same device, and only one of them may erase what the user chose.
+
+**The picker across a replug.** The sheet was open with the Elgato selected when it was unplugged.
+Read through the accessibility API, which is the only way to see this at all: the radio image is
+`accessibilityHidden`, so the selection exists solely as `AXSelected`.
+
+```
+Button «MW's iPhone Microphone, ccwd»
+Button «MacBook Pro Microphone, bltn»        ← no [selected]: nothing inherited it
+Button «Done»  [disabled]
+```
+
+Replugged, the Elgato row returned `[selected]` and Done re-enabled. The selection is a UID, so it
+waits for its device instead of sliding onto whatever takes that place in the list. The daemon
+logged nothing for the unplug — the device it had stood aside for was still connected — and the
+four lines above for the replug.
+
+**The blocked-device confirmation, in both places a microphone can be chosen.** Connecting the
+AirPods first produced the thing the program exists for, 38 ms wide:
+
+```
+13:42:16.876 EVENT dIn  — default input changed
+13:42:16.895 ARRIVED MW’s AirPods Pro 3 [blue] input BLOCKED
+13:42:16.914 REVERT -> Elgato Wave:1 (dev#, displacing MW’s AirPods Pro 3 [blue])
+```
+
+In the sheet the ⚠ is an accessibility label rather than decoration, and only the Bluetooth row
+carries it:
+
+```
+Button «MW’s AirPods Pro 3, MW’s AirPods Pro 3 connects over Bluetooth, which Micpeg is set to
+        ignore. Keeping it would leave nothing to do., blue»
+Button «MW's iPhone Microphone, ccwd»
+Button «Elgato Wave:1, usb »  [selected]
+Button «MacBook Pro Microphone, bltn»
+```
+
+Selecting it and pressing Done raises the confirmation §26 could not reach:
+
+```
+Sheet «alert» 260x170
+  «Keep MW’s AirPods Pro 3?»
+  «MW’s AirPods Pro 3 connects over Bluetooth, which Micpeg is set to ignore. Keeping it would
+   leave nothing to do.»
+  «Cancel»  «Keep Anyway»
+```
+
+Cancel left `config.json` byte-identical — compared by hash, twice in a row — and the sheet open
+with the AirPods still selected. Keep Anyway wrote it, and the daemon did as it was told:
+
+```
+13:44:46.253 SIGHUP — reloading config
+13:44:46.254 config loaded (1 priority entries, block=bluetooth,bluetoothle)
+13:44:46.265 REVERT -> MW’s AirPods Pro 3 (SIGHUP, displacing Elgato Wave:1 [usb ])
+```
+
+The onboarding list asks the same question now. With `priority` emptied and a SIGHUP, the window
+became the unconfigured shape, the AirPods row carried the same warning label, and pressing
+`«Keep MW’s AirPods Pro 3»` raised the same alert. Cancel there wrote nothing either: `priority`
+still empty, and no registration attempted. That path is the one that had no confirmation at all
+before this change.
+
+**What a fresh install looks like with a headset already connected.** In that same unconfigured
+window the button read `«Keep None»` and was disabled until a row was pressed:
+
+```
+Window «Micpeg» 460x458
+  «When a Bluetooth headset connects, macOS moves your microphone to it.»
+  «Choose the microphone to keep.»
+  Button «MW’s AirPods Pro 3, … Keeping it would leave nothing to do., blue»
+  Button «MW's iPhone Microphone, ccwd»   Button «Elgato Wave:1, usb »
+  Button «MacBook Pro Microphone, bltn»
+  Button «Keep None»  [disabled]
+```
+
+That is `suggestedChoice` returning nil because the current input is blocked — exactly the case the
+seed was written for. macOS had just moved the input to the headset, and seeding from it would have
+asked the user to confirm the one device the program cannot help with. Reasoned about in the
+comment; seen here.
+
+**Two accessibility-tool traps, recorded so the next run does not read them as defects.** A
+`confirmationDialog` is modal, but the app's window list is not ordered by that: a depth-first walk
+from window 0 reaches the picker sheet's own Cancel before the alert's, and pressing it dismissed
+the picker whole. That looks exactly like "cancelling the confirmation throws the sheet away",
+which is a defect report, and it is not what happens — search `AXFocusedWindow` first. And
+`AXUIElementPerformAction` on a SwiftUI confirmationDialog button returns
+`kAXErrorAttributeUnsupported` (-25205) while the action lands, because the element is torn down as
+it runs: three presses returned it, and all three did what they were meant to.
+
+Afterwards the settings file was restored byte for byte and the input returned to the Elgato.
+
+**Still not observed.** A refused revert, which has not happened on hardware yet. The only input
+unplugged on a Mac with no built-in microphone. The `working` and "won't start again" banners. And
+the registration scenarios: a Finder move, a move away and back, a second copy while the first
+runs, and a legacy install with and without its plist.
