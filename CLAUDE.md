@@ -24,9 +24,9 @@ touching the app.
 - Distribution is a single notarized `Micpeg.app` containing both executables.
 - Minimum macOS 14, in effect since the app target landed. SwiftPM's `platforms:` is
   package-wide, so the daemon inherits it; `@Observable` is the reason it is 14 and not 13.
-  `swift-tools-version` is 5.9 because `.macOS(.v14)` does not exist before it. **This makes
-  README's "macOS 12 (Monterey) or later" false**, including for the source build in
-  `scripts/install.sh` — the README fix is stage 5. See `docs/app-design.md`.
+  `swift-tools-version` is 5.9 because `.macOS(.v14)` does not exist before it. Both READMEs
+  claimed "macOS 12 (Monterey) or later" long after that stopped being true; they now say
+  macOS 14 and Swift 5.9, and say where the floor comes from. See `docs/app-design.md`.
 - Verified on real hardware only on macOS 26.
 - CI (`.github/workflows/ci.yml`, `macos-14`) builds with Xcode 15.3 — Swift 5.10 and the
   macOS 14 SDK — which is older than the local toolchain and stricter where SwiftUI's isolation

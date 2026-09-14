@@ -35,17 +35,33 @@ when macOS hands it to a Bluetooth device.
 - **Effectively free.** 0 idle wakeups, ~4 MB `phys_footprint`, 0.59 s of CPU across 24 hours
   of real use. It parks on `CFRunLoopRun()` with no timers and no polling — it does nothing at
   all until CoreAudio sends a notification. See [docs/verification.md](docs/verification.md).
-- **Never opens the microphone.** It sets a routing preference; it does not capture. No orange
-  recording indicator, no TCC prompt, no interference with whatever app currently holds the mic.
+- **The agent never opens the microphone.** It sets a routing preference; it does not capture.
+  No orange recording indicator, no TCC prompt, no interference with whatever app currently
+  holds the mic. The settings app opens it only while you run its input test, and asks for
+  permission the first time.
+
+## Two pieces
+
+- **`micpeg`** — the launchd agent and its command-line interface. This is the program, and it
+  is finished. Everything below installs and drives this.
+- **`Micpeg.app`** — a small SwiftUI settings app: pick a microphone, confirm the agent is
+  working, run an input test. It is built and exercised, but **not distributed yet.** There is
+  no signed download; `./scripts/bundle.sh` assembles it and signs it with whatever development
+  certificate you already have, which is enough to run it yourself and not enough to hand to
+  anyone else. A Developer ID build is the next piece of work.
 
 ## Requirements
 
-- macOS 12 (Monterey) or later
-- Swift 5.7+ toolchain (Xcode or the Swift command-line tools)
+- macOS 14 (Sonoma) or later
+- Swift 5.9+ toolchain (Xcode or the Swift command-line tools)
 
-> **Honest scope note:** micpeg builds for macOS 12+, but it has only been exercised on real
-> hardware on macOS 26. In particular, whether `kAudioHardwarePropertyServiceRestarted`
-> (the HAL-restart recovery hook) actually fires on older releases is unverified. If it does
+The agent needs neither: it links CoreAudio and Foundation and would run on far older releases.
+The floor comes from the settings app — `@Observable` is macOS 14 — and SwiftPM applies
+`platforms:` package-wide, so the agent inherits it.
+
+> **Honest scope note:** micpeg builds for macOS 14+, but it has only been exercised on real
+> hardware on macOS 26 (26.6). In particular, whether `kAudioHardwarePropertyServiceRestarted`
+> (the HAL-restart recovery hook) actually fires on macOS 14 and 15 is unverified. If it does
 > not, the listener simply never gets called — degraded, not harmful.
 
 ## Install
@@ -61,6 +77,9 @@ cd micpeg
 That builds the binary, copies it to `~/.local/bin/micpeg`, writes
 `~/Library/LaunchAgents/com.micpeg.agent.plist`, seeds the config from your **current**
 default input, and starts the agent. No `sudo` — everything stays under your home directory.
+
+This installs the agent, not the app. The script refuses to run if `Micpeg.app` is already
+managing the agent: one launchd label cannot have two registration paths.
 
 For a universal (Apple Silicon + Intel) binary: `MICPEG_UNIVERSAL=1 ./scripts/install.sh`
 

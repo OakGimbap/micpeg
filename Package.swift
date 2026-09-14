@@ -11,9 +11,8 @@ import PackageDescription
 //
 // platforms is package-wide in SwiftPM, so the daemon inherits the app's minimum. macOS 14
 // rather than 13 (which SMAppService alone would have allowed) because @Observable is
-// 14-only; see docs/app-design.md, "Deployment target". This makes README's "macOS 12
-// (Monterey) or later" false, including for the source-build path in scripts/install.sh —
-// that README fix is stage 5.
+// 14-only; see docs/app-design.md, "Deployment target". Both READMEs said "macOS 12
+// (Monterey) or later" until this line was true of them too; they now say 14, and say why.
 let package = Package(
     name: "micpeg",
     platforms: [.macOS(.v14)],

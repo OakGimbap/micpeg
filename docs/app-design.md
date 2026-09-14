@@ -149,8 +149,9 @@ throughout — more boilerplate in exactly the code that bridges CoreAudio callb
 watcher and the log parser into the view, which is the part most likely to be got wrong.
 macOS 14 shipped in September 2023.
 
-**This makes `README.md`'s "macOS 12 (Monterey) or later" false** from the moment the package
-moves, including for the source-build path in `scripts/install.sh`. Fix it in stage 5.
+**This made `README.md`'s "macOS 12 (Monterey) or later" false** from the moment the package
+moved, including for the source-build path in `scripts/install.sh`. Both READMEs now say
+macOS 14 and Swift 5.9, and name the settings app as the reason the agent's floor moved.
 
 ## Bundle layout
 
